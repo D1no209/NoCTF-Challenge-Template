@@ -1,0 +1,40 @@
+apiVersion: gitops.noctf.dev/v1
+kind: ChallengeTemplate
+id: 40000000-0000-0000-0000-000000000101
+mode: Awdp
+title: AWDP Example
+direction: Examples
+visibility: Private
+statement: statement.md
+attachments: []
+flags: []
+build:
+  images:
+    - key: target
+      context: runtime
+      dockerfile: runtime/Dockerfile
+    - key: checker
+      context: checker
+      dockerfile: checker/Dockerfile
+runtime:
+  allocation: PerTeam
+  limits:
+    memoryBytes: 268435456
+    nanoCpus: 500000000
+    pidsLimit: 128
+  definition:
+    kind: Container
+    image:
+      build: target
+    internalPorts: [8080]
+patch:
+  entrypoint: fix.sh
+  command: []
+  timeoutSeconds: 60
+  readyTimeoutSeconds: 30
+checker:
+  image:
+    build: checker
+  command: []
+  environment: {}
+  timeoutSeconds: 30

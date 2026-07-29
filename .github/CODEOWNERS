@@ -1,0 +1,9 @@
+/.github/ @competition-admins
+/competition.yml @competition-admins
+/web/ @web-reviewers
+/pwn/ @pwn-reviewers
+/crypto/ @crypto-reviewers
+/reverse/ @reverse-reviewers
+/misc/ @misc-reviewers
+**/runtime/ @runtime-reviewers
+**/checker/ @judge-reviewers

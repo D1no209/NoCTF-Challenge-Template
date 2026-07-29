@@ -1,0 +1,48 @@
+apiVersion: gitops.noctf.dev/v1
+kind: ChallengeTemplate
+id: 30000000-0000-0000-0000-000000000101
+mode: Awd
+title: AWD Compose Example
+direction: Examples
+visibility: Private
+statement: statement.md
+attachments: []
+flags: []
+build:
+  images:
+    - key: web
+      context: runtime/web
+      dockerfile: runtime/web/Dockerfile
+    - key: checker
+      context: checker
+      dockerfile: checker/Dockerfile
+runtime:
+  allocation: PerTeam
+  flagSource: AwdRotation
+  limits:
+    memoryBytes: 268435456
+    nanoCpus: 500000000
+    pidsLimit: 128
+  definition:
+    kind: Compose
+    file: runtime/compose.yml
+    serviceImages:
+      web:
+        build: web
+      redis:
+        external: redis@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    serviceResources:
+      web:
+        memoryBytes: 134217728
+        nanoCpus: 250000000
+        pidsLimit: 64
+      redis:
+        memoryBytes: 134217728
+        nanoCpus: 250000000
+        pidsLimit: 64
+checker:
+  targetServiceName: web
+  job:
+    image:
+      build: checker
+    timeoutSeconds: 30

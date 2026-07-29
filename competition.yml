@@ -1,0 +1,23 @@
+apiVersion: gitops.noctf.dev/v1
+kind: CompetitionChallengeSet
+competitionId: 00000000-0000-0000-0000-000000000001
+mode: Ctf
+challenges:
+  - id: 00000000-0000-0000-0000-000000000102
+    challenge: examples/ctf-static
+    order: 10
+    baseScore: 100
+    published: false
+    hints:
+      - id: 00000000-0000-0000-0000-000000000103
+        content: 从附件内容开始检查。
+        cost: 10
+        publishedAt: null
+    rules:
+      schemaVersion: 1
+      points:
+        initialPoints: 100
+        minimumPoints: 50
+        decayFactor: 10
+      bloodRewards: []
+      maxFlagAttempts: 20

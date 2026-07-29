@@ -1,0 +1,12 @@
+apiVersion: gitops.noctf.dev/v1
+kind: ChallengeTemplate
+id: 00000000-0000-0000-0000-000000000101
+mode: Ctf
+title: Static Example
+direction: Examples
+visibility: Private
+statement: statement.md
+attachments: []
+flags:
+  - id: 00000000-0000-0000-0000-000000000104
+    value: flag{replace_this_example}

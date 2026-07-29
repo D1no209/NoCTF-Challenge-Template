@@ -1,0 +1,45 @@
+apiVersion: gitops.noctf.dev/v1
+kind: ChallengeTemplate
+id: 20000000-0000-0000-0000-000000000101
+mode: Awd
+title: AWD Container Example
+direction: Examples
+visibility: Private
+statement: statement.md
+attachments: []
+flags: []
+build:
+  images:
+    - key: runtime
+      context: runtime
+      dockerfile: runtime/Dockerfile
+      platforms: [linux/amd64]
+    - key: checker
+      context: checker
+      dockerfile: checker/Dockerfile
+      platforms: [linux/amd64]
+runtime:
+  allocation: PerTeam
+  flagSource: AwdRotation
+  definition:
+    kind: Container
+    image:
+      build: runtime
+  limits:
+    memoryBytes: 536870912
+    nanoCpus: 1000000000
+    pidsLimit: 256
+flagTemplate:
+  header: flag
+  bodyTemplate: "[TEAMHASH:32]"
+  leetLiteralText: false
+flagInjection:
+  command: /app/set-flag '${FLAG}'
+  timeoutSeconds: 30
+checker:
+  job:
+    image:
+      build: checker
+    command: []
+    environment: {}
+    timeoutSeconds: 30

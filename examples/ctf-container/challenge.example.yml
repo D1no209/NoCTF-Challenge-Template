@@ -1,0 +1,34 @@
+apiVersion: gitops.noctf.dev/v1
+kind: ChallengeTemplate
+id: 10000000-0000-0000-0000-000000000101
+mode: Ctf
+title: CTF Container Example
+direction: Examples
+visibility: Private
+statement: statement.md
+attachments: []
+flags: []
+build:
+  images:
+    - key: runtime
+      context: runtime
+      dockerfile: runtime/Dockerfile
+      platforms: [linux/amd64]
+runtime:
+  allocation: PerTeam
+  flagSource: PerTeam
+  definition:
+    kind: Container
+    image:
+      build: runtime
+    environment: {}
+    flagEnvironmentVariableName: FLAG
+  limits:
+    memoryBytes: 268435456
+    nanoCpus: 500000000
+    pidsLimit: 128
+  endpoints:
+    - name: web
+      protocol: Http
+      containerPort: 8080
+      exposure: OwnerOnly

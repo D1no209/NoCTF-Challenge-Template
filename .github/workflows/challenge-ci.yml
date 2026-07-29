@@ -1,0 +1,151 @@
+name: Challenge CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      rebuild_all:
+        description: Rebuild every declared image
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: challenge-main-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: 10.0.x
+      - name: Build repository tool
+        run: dotnet build .github/scripts/repository.cs
+      - name: Validate manifests
+        run: dotnet run --file .github/scripts/repository.cs -- validate
+      - name: Run repository tests
+        run: dotnet run --file .github/scripts/repository.cs -- self-test
+
+  plan:
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: 10.0.x
+      - id: plan
+        name: Discover changed images
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "${{ inputs.rebuild_all }}" == "true" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            dotnet run --file .github/scripts/repository.cs -- plan --all --sha "$HEAD_SHA" --github-output
+          else
+            dotnet run --file .github/scripts/repository.cs -- plan --base "$BASE_SHA" --head "$HEAD_SHA" --sha "$HEAD_SHA" --github-output
+          fi
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: 10.0.x
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Login to custom Registry
+        if: github.event_name != 'pull_request' && vars.CUSTOM_REGISTRY_HOST != ''
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ${{ vars.CUSTOM_REGISTRY_HOST }}
+          username: ${{ secrets.CUSTOM_REGISTRY_USERNAME }}
+          password: ${{ secrets.CUSTOM_REGISTRY_PASSWORD }}
+      - name: Build image
+        env:
+          CUSTOM_REGISTRY_HOST: ${{ vars.CUSTOM_REGISTRY_HOST }}
+          CUSTOM_REGISTRY_NAMESPACE: ${{ vars.CUSTOM_REGISTRY_NAMESPACE }}
+        run: >-
+          dotnet run --file .github/scripts/repository.cs --
+          build
+          --challenge '${{ matrix.image.challenge }}'
+          --key '${{ matrix.image.key }}'
+          --sha '${{ matrix.image.gitSha }}'
+          ${{ github.event_name != 'pull_request' && '--push' || '' }}
+
+  apply:
+    needs: [validate, plan, build]
+    if: >-
+      always()
+      && github.event_name != 'pull_request'
+      && needs.validate.result == 'success'
+      && needs.plan.result == 'success'
+      && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: 10.0.x
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+      - name: Login to selected GHCR
+        if: vars.NOCTF_IMAGE_REGISTRY == '' || vars.NOCTF_IMAGE_REGISTRY == 'ghcr'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Login to selected custom Registry
+        if: vars.NOCTF_IMAGE_REGISTRY == 'custom'
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ${{ vars.CUSTOM_REGISTRY_HOST }}
+          username: ${{ secrets.CUSTOM_REGISTRY_USERNAME }}
+          password: ${{ secrets.CUSTOM_REGISTRY_PASSWORD }}
+      - name: Apply repository state to NoCTF
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+          NOCTF_API_URL: ${{ vars.NOCTF_API_URL }}
+          NOCTF_IMAGE_REGISTRY: ${{ vars.NOCTF_IMAGE_REGISTRY }}
+          NOCTF_BOT_TOKEN: ${{ secrets.NOCTF_BOT_TOKEN }}
+          CUSTOM_REGISTRY_HOST: ${{ vars.CUSTOM_REGISTRY_HOST }}
+          CUSTOM_REGISTRY_NAMESPACE: ${{ vars.CUSTOM_REGISTRY_NAMESPACE }}
+        run: |
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            dotnet run --file .github/scripts/repository.cs -- apply --base "$BASE_SHA" --head "$HEAD_SHA"
+          else
+            dotnet run --file .github/scripts/repository.cs -- apply
+          fi
