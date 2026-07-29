@@ -11,6 +11,8 @@
 #:include RepositoryApp.Utilities.cs
 #:include RepositoryApp.Build.cs
 #:include RepositoryApp.Scaffold.cs
+#:include RepositoryApp.Initialize.cs
+#:include RepositoryApp.Readme.cs
 #:include RepositoryApp.Apply.cs
 #:include RepositoryApp.ApplyResources.cs
 #:include RepositoryApp.CompetitionApply.cs

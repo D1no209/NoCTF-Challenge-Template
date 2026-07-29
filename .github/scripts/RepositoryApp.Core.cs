@@ -29,17 +29,19 @@ internal static partial class RepositoryApp
     {
         var root = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourceFile)!, "..", ".."));
         if (args.Length == 0)
-            return Fail("Usage: repository.cs <scaffold|validate|discover|plan|build|apply|self-test>");
+            return Fail("Usage: repository.cs <initialize|scaffold|validate|discover|plan|build|apply|readme|self-test>");
         try
         {
             return args[0] switch
             {
+                "initialize" => await InitializeAsync(root, args[1..]),
                 "scaffold" => await ScaffoldAsync(root, args[1..]),
                 "validate" => Validate(root),
                 "discover" => Discover(root, args[1..]),
                 "plan" => Plan(root, args[1..]),
                 "build" => await BuildAsync(root, args[1..]),
                 "apply" => await ApplyAsync(root, args[1..]),
+                "readme" => GenerateReadme(root),
                 "self-test" => SelfTest(root),
                 _ => Fail($"Unknown command '{args[0]}'.")
             };
@@ -62,6 +64,22 @@ internal static partial class RepositoryApp
             throw new InvalidOperationException("Direction normalization failed.");
         if (NormalizeRuntime("Static (no runtime)") != "None")
             throw new InvalidOperationException("Static runtime normalization failed.");
+        if (NormalizeApiMode("0") != "Ctf" || NormalizeApiMode("Koh") != "Koh")
+            throw new InvalidOperationException("API mode normalization failed.");
+        var initializationFields = ParseIssueForm(
+            "### Competition ID\n\n00000000-0000-0000-0000-000000000001\n\n"
+            + "### Game Mode\n\nCtf\n");
+        if (Field(initializationFields, "Game Mode") != "Ctf")
+            throw new InvalidOperationException("Initialization Issue parsing failed.");
+        try
+        {
+            using var invalidClient = new NoCtfClient("file:///tmp/noctf", "token");
+            throw new InvalidOperationException("Invalid NoCTF API URL test failed.");
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.Contains("HTTP or HTTPS", StringComparison.Ordinal))
+        {
+        }
         foreach (var sample in new[]
                  {
                      ("Ctf", "None"),
@@ -93,9 +111,19 @@ internal static partial class RepositoryApp
                 && !runtime!.Children.ContainsKey(new YamlScalarNode("controlCheck")))
                 throw new InvalidOperationException("KoH controlCheck must follow the runtime.");
         }
-        ValidateIssueForm(Path.Combine(root, ".github", "ISSUE_TEMPLATE", "create-challenge.yml"));
-        ValidateWorkflow(Path.Combine(root, ".github", "workflows", "challenge-ci.yml"));
-        ValidateWorkflow(Path.Combine(root, ".github", "workflows", "scaffold-challenge.yml"));
+        foreach (var issueForm in Directory.EnumerateFiles(
+                     Path.Combine(root, ".github", "ISSUE_TEMPLATE"),
+                     "*.yml"))
+            if (!Path.GetFileName(issueForm).Equals("config.yml", StringComparison.Ordinal))
+                ValidateIssueForm(issueForm);
+        foreach (var workflow in Directory.EnumerateFiles(
+                     Path.Combine(root, ".github", "workflows"),
+                     "*.yml"))
+            ValidateWorkflow(workflow);
+        var readme = RenderReadme(root);
+        if (!readme.Contains("Static Example", StringComparison.Ordinal)
+            || !readme.Contains("## Challenges", StringComparison.Ordinal))
+            throw new InvalidOperationException("README rendering failed.");
         foreach (var example in Directory.EnumerateFiles(
                      Path.Combine(root, "examples"),
                      "challenge.example.yml",
@@ -151,22 +179,24 @@ internal static partial class RepositoryApp
             if (!Regex.IsMatch(match.Groups[1].Value, "^[0-9a-f]{40}$"))
                 throw new InvalidOperationException(
                     $"{path} contains an Action that is not pinned to a commit SHA.");
-        var tokenIndex = text.IndexOf("NOCTF_BOT_TOKEN", StringComparison.Ordinal);
-        var applyIndex = Regex.Match(text, @"(?m)^  apply:\s*$").Index;
-        var tokenLines = Regex.Matches(text, @"(?m)^.*NOCTF_BOT_TOKEN.*$").Count;
-        if (tokenIndex >= 0
-            && (tokenLines != 1
-                || applyIndex == 0
-                || tokenIndex < applyIndex))
-            throw new InvalidOperationException(
-                "NOCTF_BOT_TOKEN must appear only in the apply job.");
-        if (Path.GetFileName(path).Equals("challenge-ci.yml", StringComparison.Ordinal)
-            && (!text.Contains("id: apply_config", StringComparison.Ordinal)
+        if (Path.GetFileName(path).Equals("challenge-ci.yml", StringComparison.Ordinal))
+        {
+            var tokenIndex = text.IndexOf("NOCTF_BOT_TOKEN", StringComparison.Ordinal);
+            var applyIndex = Regex.Match(text, @"(?m)^  apply:\s*$").Index;
+            var tokenLines = Regex.Matches(text, @"(?m)^.*NOCTF_BOT_TOKEN.*$").Count;
+            if (tokenIndex >= 0
+                && (tokenLines != 1
+                    || applyIndex == 0
+                    || tokenIndex < applyIndex))
+                throw new InvalidOperationException(
+                    "NOCTF_BOT_TOKEN must appear only in the apply job.");
+            if (!text.Contains("id: apply_config", StringComparison.Ordinal)
                 || !text.Contains(
                     "if: steps.apply_config.outputs.configured == 'true'",
-                    StringComparison.Ordinal)))
-            throw new InvalidOperationException(
-                "Challenge CI must skip registry login and Apply until NoCTF configuration is present.");
+                    StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Challenge CI must skip registry login and Apply until NoCTF configuration is present.");
+        }
     }
 
     private static void WriteApplySummary(string outcome)

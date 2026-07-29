@@ -5,9 +5,8 @@
 ## 初始化
 
 1. 使用 GitHub 的 **Use this template** 创建比赛仓库，不要 fork。
-2. 在 NoCTF 创建比赛，修改 `competition.yml` 的 `competitionId` 和 `mode`。
-3. 删除或替换 `examples/ctf-static` 示例；Challenge 与 Competition 必须使用相同 Mode。
-4. 由平台 Administrator 创建 `Organizer` Bot：
+2. 在 NoCTF 创建比赛。
+3. 由平台 Administrator 创建 `Organizer` Bot：
 
    ```http
    POST /api/v1/admin/platform/bots
@@ -18,8 +17,8 @@
    }
    ```
 
-5. 把 Bot 加入比赛的 `ManagerIds`。Bot 创建的新 Challenge 会由该 Bot 自动成为 Owner；接管已有 Challenge 时，需要原 Owner 把 Bot 加入 Challenge `ManagerIds`。
-6. 为 Bot 签发所需时长的普通 Access JWT：
+4. 把 Bot 加入比赛的 `ManagerIds`。Bot 创建的新 Challenge 会由该 Bot 自动成为 Owner；接管已有 Challenge 时，需要原 Owner 把 Bot 加入 Challenge `ManagerIds`。
+5. 为 Bot 签发所需时长的普通 Access JWT：
 
    ```http
    POST /api/v1/admin/platform/bots/{botUserId}/tokens
@@ -29,7 +28,16 @@
    }
    ```
 
-7. 把 JWT 保存为 Repository Secret `NOCTF_BOT_TOKEN`。撤销时在 NoCTF 递增该 Bot 的 TokenVersion。
+6. 配置 Repository Variable `NOCTF_API_URL`，并把 JWT 保存为 Repository Secret
+   `NOCTF_BOT_TOKEN`。
+7. 创建 **Initialize competition** Issue。Action 会验证平台连通性、JWT、比赛访问权、
+   Competition ID 和 Mode，然后创建 `initialize/competition` Draft PR。
+8. 审核并合并初始化 PR。它会填写 `competition.yml`、移除示例题，并生成比赛
+   `README.md`。撤销 JWT 时在 NoCTF 递增该 Bot 的 TokenVersion。
+
+初始化失败时，Action 会在 Issue 中更新诊断评论。修复 Variable、Secret 或平台权限后，
+在 Issue 评论 `/retry` 即可再次检查；也可以编辑/重新打开 Issue，或手工 dispatch
+初始化 workflow 并填写 Issue number。
 
 Bot 的不可用 `.invalid` Email 和随机 dummy PasswordHash 由服务端生成；禁止密码登录是
 `UserKind.Bot` 的认证规则，不依赖 dummy password 保密。Bot 不能 Refresh，也没有 OIDC
@@ -85,12 +93,17 @@ Bot 的不可用 `.invalid` Email 和随机 dummy PasswordHash 由服务端生�
 dotnet build .github/scripts/repository.cs
 dotnet run --file .github/scripts/repository.cs -- validate
 dotnet run --file .github/scripts/repository.cs -- self-test
+dotnet run --file .github/scripts/repository.cs -- readme
 dotnet run --file .github/scripts/repository.cs -- discover --base origin/main --head HEAD
 dotnet run --file .github/scripts/repository.cs -- plan --base origin/main --head HEAD
 dotnet run --file .github/scripts/repository.cs -- build --challenge web/sql-notes --key runtime
 ```
 
 本地 `build` 不推送 Registry，也不调用 NoCTF。
+
+初始化完成后，合并到 `main` 的 `competition.yml` 或 `challenge.yml` 变更会触发
+README 自动重建，生成按比赛顺序排列的题目表与方向统计。详细维护说明见
+[`docs/repository-management.md`](docs/repository-management.md)。
 
 ## Manifest 边界
 

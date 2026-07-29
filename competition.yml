@@ -1,6 +1,9 @@
 apiVersion: gitops.noctf.dev/v1
 kind: CompetitionChallengeSet
+initialized: false
 competitionId: 00000000-0000-0000-0000-000000000001
+title: NoCTF Competition Template
+description: Initialize this repository from the Initialize competition Issue Form.
 mode: Ctf
 challenges:
   - id: 00000000-0000-0000-0000-000000000102

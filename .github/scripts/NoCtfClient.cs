@@ -15,7 +15,11 @@ internal sealed class NoCtfClient : IDisposable
 
     public NoCtfClient(string baseUrl, string token)
     {
-        client = new HttpClient { BaseAddress = new Uri(baseUrl.TrimEnd('/') + "/") };
+        if (!Uri.TryCreate(baseUrl.TrimEnd('/') + "/", UriKind.Absolute, out var uri)
+            || uri.Scheme is not ("http" or "https"))
+            throw new InvalidOperationException(
+                "NOCTF_API_URL must be an absolute HTTP or HTTPS URL.");
+        client = new HttpClient { BaseAddress = uri };
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 

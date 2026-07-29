@@ -98,6 +98,11 @@ internal static partial class RepositoryApp
     private static string Required(string[] args, string name) =>
         Option(args, name) ?? throw new InvalidOperationException($"{name} is required.");
 
+    private static string RequiredEnvironment(string name) =>
+        Environment.GetEnvironmentVariable(name) is { Length: > 0 } value
+            ? value
+            : throw new InvalidOperationException($"Environment variable {name} is required.");
+
     private static string? Option(string[] args, string name)
     {
         var index = Array.IndexOf(args, name);

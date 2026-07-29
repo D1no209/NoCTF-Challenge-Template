@@ -1,0 +1,32 @@
+name: Initialize competition
+description: Bind this repository to an existing NoCTF competition and verify the Bot configuration.
+title: "[Initialize] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, configure repository variable `NOCTF_API_URL` and
+        repository secret `NOCTF_BOT_TOKEN`. The Bot must be a Manager of the
+        selected competition.
+  - type: input
+    id: competition_id
+    attributes:
+      label: Competition ID
+      description: UUID of the competition already created in NoCTF.
+      placeholder: 01900000-0000-7000-8000-000000000000
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Game Mode
+      options: [Ctf, Awd, Awdp, Koh]
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: The Bot has been granted Manager permission for this competition.
+          required: true
