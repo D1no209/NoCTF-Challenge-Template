@@ -60,6 +60,8 @@ internal static partial class RepositoryApp
             throw new InvalidOperationException(string.Join(Environment.NewLine, errors));
         if (NormalizeSegment("Web Security") != "web-security")
             throw new InvalidOperationException("Direction normalization failed.");
+        if (NormalizeRuntime("Static (no runtime)") != "None")
+            throw new InvalidOperationException("Static runtime normalization failed.");
         foreach (var sample in new[]
                  {
                      ("Ctf", "None"),
@@ -91,6 +93,7 @@ internal static partial class RepositoryApp
                 && !runtime!.Children.ContainsKey(new YamlScalarNode("controlCheck")))
                 throw new InvalidOperationException("KoH controlCheck must follow the runtime.");
         }
+        ValidateIssueForm(Path.Combine(root, ".github", "ISSUE_TEMPLATE", "create-challenge.yml"));
         ValidateWorkflow(Path.Combine(root, ".github", "workflows", "challenge-ci.yml"));
         ValidateWorkflow(Path.Combine(root, ".github", "workflows", "scaffold-challenge.yml"));
         foreach (var example in Directory.EnumerateFiles(
@@ -122,6 +125,22 @@ internal static partial class RepositoryApp
         return 0;
     }
 
+    private static void ValidateIssueForm(string path)
+    {
+        var root = Mapping(LoadYaml(path));
+        foreach (var item in Sequence(root, "body"))
+        {
+            if (!string.Equals(Scalar(item, "type"), "dropdown", StringComparison.Ordinal))
+                continue;
+            var attributes = Mapping(item.Children[new YamlScalarNode("attributes")]);
+            var options = ((YamlSequenceNode)attributes.Children[new YamlScalarNode("options")]).Children
+                .Select(node => ((YamlScalarNode)node).Value ?? "");
+            if (options.Any(option => option.Equals("None", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException(
+                    $"{path} contains GitHub's reserved dropdown option 'None'.");
+        }
+    }
+
     private static void ValidateWorkflow(string path)
     {
         _ = LoadYaml(path);
@@ -141,6 +160,13 @@ internal static partial class RepositoryApp
                 || tokenIndex < applyIndex))
             throw new InvalidOperationException(
                 "NOCTF_BOT_TOKEN must appear only in the apply job.");
+        if (Path.GetFileName(path).Equals("challenge-ci.yml", StringComparison.Ordinal)
+            && (!text.Contains("id: apply_config", StringComparison.Ordinal)
+                || !text.Contains(
+                    "if: steps.apply_config.outputs.configured == 'true'",
+                    StringComparison.Ordinal)))
+            throw new InvalidOperationException(
+                "Challenge CI must skip registry login and Apply until NoCTF configuration is present.");
     }
 
     private static void WriteApplySummary(string outcome)

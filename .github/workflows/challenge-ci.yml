@@ -118,22 +118,46 @@ jobs:
       - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
         with:
           dotnet-version: 10.0.x
+      - id: apply_config
+        name: Check NoCTF configuration
+        env:
+          NOCTF_API_URL: ${{ vars.NOCTF_API_URL }}
+        run: |
+          if [[ -z "$NOCTF_API_URL" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## NoCTF GitOps Apply"
+              echo
+              echo "> [!WARNING]"
+              echo "> Apply skipped because repository variable \`NOCTF_API_URL\` is not configured."
+              echo
+              echo "Complete the repository setup documented in README.md, including the Bot token secret."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+        if: steps.apply_config.outputs.configured == 'true'
       - name: Login to selected GHCR
-        if: vars.NOCTF_IMAGE_REGISTRY == '' || vars.NOCTF_IMAGE_REGISTRY == 'ghcr'
+        if: >-
+          steps.apply_config.outputs.configured == 'true'
+          && (vars.NOCTF_IMAGE_REGISTRY == '' || vars.NOCTF_IMAGE_REGISTRY == 'ghcr')
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Login to selected custom Registry
-        if: vars.NOCTF_IMAGE_REGISTRY == 'custom'
+        if: >-
+          steps.apply_config.outputs.configured == 'true'
+          && vars.NOCTF_IMAGE_REGISTRY == 'custom'
         uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
         with:
           registry: ${{ vars.CUSTOM_REGISTRY_HOST }}
           username: ${{ secrets.CUSTOM_REGISTRY_USERNAME }}
           password: ${{ secrets.CUSTOM_REGISTRY_PASSWORD }}
       - name: Apply repository state to NoCTF
+        if: steps.apply_config.outputs.configured == 'true'
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.before }}

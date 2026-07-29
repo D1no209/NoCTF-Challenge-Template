@@ -24,7 +24,7 @@ internal static partial class RepositoryApp
         var direction = NormalizeSegment(Field(fields, "Direction"));
         var slug = NormalizeSegment(Field(fields, "Slug"));
         var mode = NormalizeMode(Field(fields, "Game Mode"));
-        var runtime = Field(fields, "Runtime Type");
+        var runtime = NormalizeRuntime(Field(fields, "Runtime Type"));
         var owner = Field(fields, "Owner").Trim().TrimStart('@');
         var score = long.Parse(Field(fields, "Base Score"));
         var order = int.Parse(Field(fields, "Order"));

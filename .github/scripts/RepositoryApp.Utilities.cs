@@ -44,6 +44,14 @@ internal static partial class RepositoryApp
         _ => throw new InvalidOperationException($"Unsupported mode '{value}'.")
     };
 
+    private static string NormalizeRuntime(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "static (no runtime)" => "None",
+        "container" => "Container",
+        "compose" => "Compose",
+        _ => throw new InvalidOperationException($"Unsupported runtime type '{value}'.")
+    };
+
     private static bool IsMode(string value) =>
         value.Equals("Ctf", StringComparison.OrdinalIgnoreCase)
         || value.Equals("Awd", StringComparison.OrdinalIgnoreCase)
