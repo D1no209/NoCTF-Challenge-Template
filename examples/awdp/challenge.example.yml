@@ -18,6 +18,11 @@ build:
       dockerfile: checker/Dockerfile
 runtime:
   allocation: PerTeam
+  flagSource: PerTeam
+  endpoints:
+    - protocol: Http
+      containerPort: 8080
+      exposure: OwnerOnly
   limits:
     memoryBytes: 268435456
     nanoCpus: 500000000
@@ -27,6 +32,8 @@ runtime:
     image:
       build: target
     internalPorts: [8080]
+    flagEnvironmentVariableName: FLAG
+checkerFixInput: false
 patch:
   entrypoint: fix.sh
   command: []

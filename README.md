@@ -2,6 +2,9 @@
 
 一场比赛对应一个由本模板创建的 GitHub 仓库。题目通过 Issue 创建分支和 Draft PR；合并到 `main` 后，仓库 Action 构建镜像并使用普通 NoCTF Bot JWT 调用管理 API。
 
+当前脚本只使用 NoCTF 已有的读取与 CRUD 接口，不新增 GitOps 接口。升级现有仓库前，
+请先阅读 [契约升级与安全重跑](docs/contract-upgrade.md)。不要在平台重新增加旧的 revision 或 baseScore 字段。
+
 ## 初始化
 
 1. 使用 GitHub 的 **Use this template** 创建比赛仓库，不要 fork。
@@ -21,7 +24,7 @@
 5. 为 Bot 签发所需时长的普通 Access JWT：
 
    ```http
-   POST /api/v1/admin/platform/bots/{botUserId}/tokens
+   POST /api/v1/admin/platform/users/{botUserId}/tokens
 
    {
      "expiresInSeconds": 31536000
@@ -33,7 +36,8 @@
 7. 创建 **Initialize competition** Issue。Action 会验证平台连通性、JWT、比赛访问权、
    Competition ID 和 Mode，然后创建 `initialize/competition` Draft PR。
 8. 审核并合并初始化 PR。它会填写 `competition.yml`、移除示例题，并生成比赛
-   `README.md`。撤销 JWT 时在 NoCTF 递增该 Bot 的 TokenVersion。
+   `README.md`。撤销 JWT 时调用
+   `DELETE /api/v1/admin/platform/users/{botUserId}/tokens` 递增该 Bot 的 TokenVersion。
 
 初始化失败时，Action 会在 Issue 中更新诊断评论。修复 Variable、Secret 或平台权限后，
 在 Issue 评论 `/retry` 即可再次检查；也可以编辑/重新打开 Issue，或手工 dispatch
@@ -108,7 +112,8 @@ README 自动重建，生成按比赛顺序排列的题目表与方向统计。�
 ## Manifest 边界
 
 - `challenge.yml` 管理 Challenge metadata、题面、附件、静态 Flag、Runtime、Checker和动态 Flag注入。
-- `competition.yml` 管理 CompetitionChallenge ID、顺序、BaseScore、发布状态、Hints和 Rules。
+- `competition.yml` 管理 CompetitionChallenge ID、可空 customTitle、顺序、发布状态、Hints 和模式专属 Rules；没有独立 BaseScore。
+- CTF Definition 使用 schemaVersion 3，CTF Rules 使用 schemaVersion 2；两者是独立契约。
 - Manifest 禁止 provider、runnerPool、hostPort、namespace、Ingress和 Checker target URL/port。
 - Attachment 内容不可原位替换；内容变化时必须生成新的 Attachment ID。
 - 外部镜像必须使用 `registry/image@sha256:...`。

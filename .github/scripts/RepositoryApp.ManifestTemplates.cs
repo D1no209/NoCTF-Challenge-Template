@@ -30,7 +30,7 @@ internal static partial class RepositoryApp
             ("Awd", "Container") => ContainerBlock(
                 "runtime",
                 "PerTeam",
-                "  flagSource: AwdRotation\nflagTemplate:\n  header: flag\n  bodyTemplate: \"[TEAMHASH:32]\"\n  leetLiteralText: false\nflagInjection:\n  command: /app/set-flag '${FLAG}'\n  timeoutSeconds: 30\nchecker:\n  job:\n    image:\n      build: checker\n    timeoutSeconds: 30\n",
+                "  flagSource: AwdRotation\nflagInjection:\n  command: /app/set-flag '${FLAG}'\n  timeoutSeconds: 30\nchecker:\n  job:\n    image:\n      build: checker\n    timeoutSeconds: 30\n",
                 includeChecker: true),
             ("Awd", "Compose") => ComposeBlock(includeChecker: true),
             ("Awdp", "Container") => """
@@ -45,11 +45,17 @@ internal static partial class RepositoryApp
                       dockerfile: checker/Dockerfile
                 runtime:
                   allocation: PerTeam
+                  flagSource: PerTeam
                   definition:
                     kind: Container
                     image:
                       build: target
                     internalPorts: [8080]
+                    flagEnvironmentVariableName: FLAG
+                  endpoints:
+                    - protocol: Http
+                      containerPort: 8080
+                      exposure: OwnerOnly
                   limits:
                     memoryBytes: 268435456
                     nanoCpus: 500000000
@@ -76,7 +82,7 @@ internal static partial class RepositoryApp
                 kind: ChallengeTemplate
                 id: {id}
                 mode: {mode}
-                title: {title}
+                title: {JsonSerializer.Serialize(title)}
                 direction: {direction}
                 visibility: Private
                 statement: statement.md
@@ -121,7 +127,7 @@ internal static partial class RepositoryApp
             - name: web
               protocol: Http
               containerPort: 8080
-              exposure: Participants
+              exposure: {(ctfFlag ? "OwnerOnly" : "Participants")}
         {extra}
         """;
 
@@ -157,11 +163,12 @@ internal static partial class RepositoryApp
             memoryBytes: 268435456
             nanoCpus: 500000000
             pidsLimit: 128
+          endpoints:
+            - protocol: Http
+              containerPort: 8080
+              serviceName: web
+              exposure: {(includeChecker ? "Participants" : "OwnerOnly")}
         {(includeChecker ? """
-        flagTemplate:
-          header: flag
-          bodyTemplate: "[TEAMHASH:32]"
-          leetLiteralText: false
         flagInjection:
           command: /app/set-flag '${FLAG}'
           timeoutSeconds: 30
@@ -218,19 +225,36 @@ internal static partial class RepositoryApp
         int order,
         string mode)
     {
-        var text = File.ReadAllText(path).TrimEnd();
+        var competition = Mapping(LoadYaml(path));
         var entry = $"""
-
-              - id: {id}
-                challenge: {challenge}
-                order: {order}
-                baseScore: {baseScore}
-                published: false
-                hints: []
-                rules:
-                  schemaVersion: {(mode == "Awd" ? 4 : 1)}
+            id: {id}
+            challenge: {challenge}
+            customTitle: null
+            order: {order}
+            published: false
+            hints: []
             """;
-        File.WriteAllText(path, text + Environment.NewLine + entry + Environment.NewLine);
+        var node = Mapping(LoadYamlText(entry));
+        node.Add("rules", LoadYamlText(DefaultRules(mode, baseScore).ToJsonString()));
+        ((YamlSequenceNode)competition.Children[new YamlScalarNode("challenges")]).Add(node);
+        using var writer = new StringWriter();
+        new YamlStream(new YamlDocument(competition)).Save(writer, assignAnchors: false);
+        File.WriteAllText(path, writer.ToString());
+    }
+
+    private static JsonObject DefaultRules(string mode, long score)
+    {
+        var result = new JsonObject { ["schemaVersion"] = RulesSchemaVersion(mode) };
+        JsonObject Curve() => new() { ["initialPoints"] = score, ["minimumPoints"] = score,
+            ["decayTeamCount"] = 10, ["decayMode"] = 0 };
+        switch (NormalizeMode(mode))
+        {
+            case "Ctf": result["scoreCurve"] = Curve(); break;
+            case "Awd": result["attackPoints"] = score; break;
+            case "Awdp": result["break"] = Curve(); result["fix"] = Curve(); break;
+            case "Koh": result["controlPointsPerInterval"] = score; break;
+        }
+        return result;
     }
 
 }

@@ -19,6 +19,11 @@ build:
 runtime:
   allocation: PerTeam
   flagSource: AwdRotation
+  endpoints:
+    - protocol: Http
+      containerPort: 8080
+      serviceName: web
+      exposure: Participants
   limits:
     memoryBytes: 268435456
     nanoCpus: 500000000
@@ -40,6 +45,10 @@ runtime:
         memoryBytes: 134217728
         nanoCpus: 250000000
         pidsLimit: 64
+flagInjection:
+  command: /app/set-flag '${FLAG}'
+  timeoutSeconds: 30
+  serviceName: web
 checker:
   targetServiceName: web
   job:

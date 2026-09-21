@@ -22,7 +22,7 @@ internal static partial class RepositoryApp
             runtime,
             $"{prefix}.runtime",
             errors,
-            "allocation", "flagSource", "definition", "limits", "endpoints", "controlCheck");
+            "allocation", "flagSource", "definition", "limits", "endpoints", "controlCheck", "ttlSeconds", "operationTimeoutSeconds");
         if (!runtime.Children.TryGetValue(new YamlScalarNode("limits"), out var limitsNode))
             errors.Add($"{prefix}: runtime.limits is required.");
         else
@@ -49,7 +49,7 @@ internal static partial class RepositoryApp
                     $"{prefix}.runtime.definition",
                     errors,
                     "kind", "image", "command", "entrypoint", "environment", "labels",
-                    "internalPorts", "flagEnvironmentVariableName");
+                    "internalPorts", "flagEnvironmentVariableName", "security", "egressPolicy");
                 break;
             case "compose":
                 RequireOnlyKeys(
@@ -70,7 +70,9 @@ internal static partial class RepositoryApp
             errors.Add($"{prefix}: AWD runtime.flagSource must be AwdRotation.");
         if (mode == "ctf" && !string.Equals(flagSource, "PerTeam", StringComparison.OrdinalIgnoreCase))
             errors.Add($"{prefix}: CTF runtime.flagSource must be PerTeam.");
-        if (mode is "awdp" or "koh" && flagSource is not null)
+        if (mode == "awdp" && !string.Equals(flagSource, "PerTeam", StringComparison.OrdinalIgnoreCase))
+            errors.Add($"{prefix}: AWDP runtime.flagSource must be PerTeam.");
+        if (mode == "koh" && flagSource is not null)
             errors.Add($"{prefix}: {document.Mode} cannot define runtime.flagSource.");
 
         if (mode == "awdp")

@@ -21,6 +21,10 @@ build:
 runtime:
   allocation: PerTeam
   flagSource: AwdRotation
+  endpoints:
+    - protocol: Http
+      containerPort: 8080
+      exposure: Participants
   definition:
     kind: Container
     image:
@@ -29,10 +33,6 @@ runtime:
     memoryBytes: 536870912
     nanoCpus: 1000000000
     pidsLimit: 256
-flagTemplate:
-  header: flag
-  bodyTemplate: "[TEAMHASH:32]"
-  leetLiteralText: false
 flagInjection:
   command: /app/set-flag '${FLAG}'
   timeoutSeconds: 30

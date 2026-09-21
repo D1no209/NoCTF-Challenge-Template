@@ -57,6 +57,8 @@ jobs:
         run: |
           if [[ "${{ inputs.rebuild_all }}" == "true" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
             dotnet run --file .github/scripts/repository.cs -- plan --all --sha "$HEAD_SHA" --github-output
+          elif [[ -z "$BASE_SHA" ]]; then
+            dotnet run --file .github/scripts/repository.cs -- plan --base "$HEAD_SHA" --head "$HEAD_SHA" --sha "$HEAD_SHA" --github-output
           else
             dotnet run --file .github/scripts/repository.cs -- plan --base "$BASE_SHA" --head "$HEAD_SHA" --sha "$HEAD_SHA" --github-output
           fi

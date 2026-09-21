@@ -50,7 +50,7 @@ internal static partial class RepositoryApp
                     Path = path,
                     Title = Scalar(challenge.Root, "title"),
                     Direction = Scalar(challenge.Root, "direction"),
-                    Score = long.Parse(Scalar(item, "baseScore")),
+                    Score = RulesScoreLabel(item, mode),
                     Published = bool.Parse(Scalar(item, "published", "false"))
                 };
             })
@@ -66,7 +66,7 @@ internal static partial class RepositoryApp
         builder.AppendLine($"- Game mode: `{mode}`");
         builder.AppendLine();
         builder.AppendLine("## Challenges").AppendLine();
-        builder.AppendLine("| Order | Challenge | Direction | Base score | Published |");
+        builder.AppendLine("| Order | Challenge | Direction | Scoring rules | Published |");
         builder.AppendLine("| ---: | --- | --- | ---: | :---: |");
         foreach (var row in rows)
             builder.AppendLine(
@@ -95,6 +95,19 @@ internal static partial class RepositoryApp
             "_This README is generated from `competition.yml` and challenge manifests. "
             + "See [repository management](docs/repository-management.md) for authoring and GitOps commands._");
         return builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
+    }
+
+    private static string RulesScoreLabel(YamlMappingNode item, string mode)
+    {
+        var rules = JsonNode.Parse(MaterializeRules(item, mode))!;
+        return NormalizeMode(mode) switch
+        {
+            "Ctf" => rules["scoreCurve"]?["initialPoints"]?.ToString() ?? "Inherited",
+            "Awd" => rules["attackPoints"]?.ToString() ?? "Inherited",
+            "Awdp" => $"Break: {rules["break"]?["initialPoints"]?.ToString() ?? "inherited"}; Fix: {rules["fix"]?["initialPoints"]?.ToString() ?? "inherited"}",
+            "Koh" => rules["controlPointsPerInterval"]?.ToString() ?? "Inherited",
+            _ => "Inherited"
+        };
     }
 
     private static string MarkdownInline(string value) =>

@@ -47,7 +47,9 @@ internal static partial class RepositoryApp
                 throw new InvalidOperationException(
                     "The competition was not found or the Bot JWT cannot access it. "
                     + "Grant the Bot competition Manager permission and retry.");
-            var actualMode = NormalizeApiMode(competition["mode"]?.ToString() ?? "");
+            RequireCompetitionManagement(competition);
+            var competitionResource = CompetitionResource(competition);
+            var actualMode = NormalizeApiMode(competitionResource["mode"]?.ToString() ?? "");
             if (!actualMode.Equals(requestedMode, StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     $"Mode mismatch: the Issue requests {requestedMode}, "
@@ -81,8 +83,8 @@ internal static partial class RepositoryApp
             WriteInitializedCompetition(
                 Path.Combine(root, "competition.yml"),
                 competitionId,
-                competition["title"]?.ToString() ?? "NoCTF Competition",
-                competition["description"]?.GetValue<string?>(),
+                competitionResource["title"]?.ToString() ?? "NoCTF Competition",
+                competitionResource["description"]?.GetValue<string?>(),
                 actualMode);
             var examples = SafeChildPath(root, "examples");
             if (Directory.Exists(examples))

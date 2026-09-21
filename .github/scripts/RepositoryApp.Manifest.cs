@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using YamlDotNet.RepresentationModel;
+using System.Buffers.Binary;
 
 internal static partial class RepositoryApp
 {
@@ -24,11 +25,23 @@ internal static partial class RepositoryApp
             mapping);
     }
 
-    private static List<string> FindChallenges(string root) =>
-        Directory.EnumerateFiles(root, "challenge.yml", SearchOption.AllDirectories)
-            .Where(path => !Relative(root, path).StartsWith(".git/", StringComparison.Ordinal))
-            .Order()
-            .ToList();
+    private static List<string> FindChallenges(string root)
+    {
+        var manifests = new List<string>();
+        foreach (var direction in Directory.EnumerateDirectories(root)
+            .Where(path => !Path.GetFileName(path).StartsWith('.')))
+        {
+            _ = SafeChildPath(root, Relative(root, direction));
+            foreach (var directory in Directory.EnumerateDirectories(direction))
+            {
+                _ = SafeChildPath(root, Relative(root, directory));
+                var manifest = Path.Combine(directory, "challenge.yml");
+                if (File.Exists(manifest))
+                    manifests.Add(SafeChildPath(directory, "challenge.yml"));
+            }
+        }
+        return manifests.Order(StringComparer.Ordinal).ToList();
+    }
 
     private static List<BuildImage> BuildImages(YamlMappingNode root)
     {
@@ -50,51 +63,113 @@ internal static partial class RepositoryApp
     private static string SourceHash(string challengeDirectory, BuildImage image)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AddHash(hash, "noctf-source-v2");
         AddHash(hash, JsonSerializer.Serialize(image));
         var context = SafeChildPath(challengeDirectory, image.Context);
-        foreach (var file in Directory.EnumerateFiles(context, "*", SearchOption.AllDirectories).Order())
-        {
-            AddHash(hash, NormalizePath(Path.GetRelativePath(context, file)));
-            hash.AppendData(File.ReadAllBytes(file));
-        }
         var dockerfile = SafeChildPath(challengeDirectory, image.Dockerfile);
-        if (!dockerfile.StartsWith(context + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            hash.AppendData(File.ReadAllBytes(dockerfile));
+        var gitRoot = new DirectoryInfo(challengeDirectory);
+        while (gitRoot is not null && !Directory.Exists(Path.Combine(gitRoot.FullName, ".git"))
+            && !File.Exists(Path.Combine(gitRoot.FullName, ".git")))
+            gitRoot = gitRoot.Parent;
+        var modes = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (gitRoot is not null)
+        {
+            foreach (var entry in Run(gitRoot.FullName, "git", ["ls-files", "--stage", "-z", "--",
+                Relative(gitRoot.FullName, context), Relative(gitRoot.FullName, dockerfile)])
+                .Split('\0', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var separator = entry.IndexOf('\t');
+                var metadata = entry[..separator].Split(' ');
+                if (metadata[2] != "0")
+                    throw new InvalidOperationException("Resolve Git merge conflicts before calculating image source identity.");
+                modes[entry[(separator + 1)..]] = metadata[0];
+            }
+        }
+        void AddFile(string kind, string relative, string file)
+        {
+            AddHash(hash, kind);
+            AddHash(hash, relative);
+            AddHash(hash, gitRoot is not null && modes.TryGetValue(Relative(gitRoot.FullName, file), out var mode)
+                ? mode : "untracked");
+            using var stream = File.OpenRead(file);
+            Span<byte> length = stackalloc byte[8];
+            BinaryPrimitives.WriteInt64BigEndian(length, stream.Length);
+            hash.AppendData(length);
+            hash.AppendData(SHA256.HashData(stream));
+        }
+        foreach (var file in Directory.EnumerateFiles(context, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+        {
+            _ = SafeChildPath(challengeDirectory, Path.GetRelativePath(challengeDirectory, file));
+            AddFile("context-file", NormalizePath(Path.GetRelativePath(context, file)), file);
+        }
+        if (!dockerfile.StartsWith(context + Path.DirectorySeparatorChar,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            AddFile("external-dockerfile", NormalizePath(image.Dockerfile), dockerfile);
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
-    private static void AddHash(IncrementalHash hash, string value) =>
-        hash.AppendData(Encoding.UTF8.GetBytes(value));
+    private static void AddHash(IncrementalHash hash, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        Span<byte> length = stackalloc byte[8];
+        BinaryPrimitives.WriteInt64BigEndian(length, bytes.Length);
+        hash.AppendData(length);
+        hash.AppendData(bytes);
+    }
 
     private static void ValidateImageReferences(
-        YamlNode node,
+        YamlMappingNode root,
         HashSet<string> buildKeys,
         string prefix,
         List<string> errors)
     {
-        if (node is YamlMappingNode mapping)
+        void ValidateReference(YamlNode? value, string path)
         {
-            if (mapping.Children.TryGetValue(new YamlScalarNode("image"), out var imageNode)
-                && imageNode is YamlMappingNode image)
+            if (value is not YamlMappingNode reference || reference.Children.Count != 1)
             {
-                if (image.Children.TryGetValue(new YamlScalarNode("build"), out var build)
-                    && !buildKeys.Contains(((YamlScalarNode)build).Value!))
-                    errors.Add($"{prefix}: image references unknown build key '{((YamlScalarNode)build).Value}'.");
-                if (image.Children.TryGetValue(new YamlScalarNode("external"), out var external)
-                    && !Regex.IsMatch(
-                        ((YamlScalarNode)external).Value!,
-                        @"^[^@\s]+@sha256:[0-9a-fA-F]{64}$"))
-                    errors.Add($"{prefix}: external images must use a digest.");
+                errors.Add($"{prefix}.{path}: use exactly one build or external image reference.");
+                return;
             }
-            foreach (var child in mapping.Children.Values)
-                ValidateImageReferences(child, buildKeys, prefix, errors);
+            var pair = reference.Children.Single();
+            var text = (pair.Value as YamlScalarNode)?.Value;
+            if (pair.Key is YamlScalarNode { Value: "build" } && text is not null && buildKeys.Contains(text))
+                return;
+            if (pair.Key is YamlScalarNode { Value: "external" } && IsImageDigest(text))
+                return;
+            errors.Add($"{prefix}.{path}: build must name a declared image; external must be pinned to a sha256 digest.");
         }
-        else if (node is YamlSequenceNode sequence)
+        if (root.Children.TryGetValue(new YamlScalarNode("runtime"), out var runtimeNode)
+            && Mapping(runtimeNode).Children.TryGetValue(new YamlScalarNode("definition"), out var definitionNode))
         {
-            foreach (var child in sequence.Children)
-                ValidateImageReferences(child, buildKeys, prefix, errors);
+            var definition = Mapping(definitionNode);
+            if (Scalar(definition, "kind").Equals("Container", StringComparison.OrdinalIgnoreCase))
+            {
+                definition.Children.TryGetValue(new YamlScalarNode("image"), out var image);
+                ValidateReference(image, "runtime.definition.image");
+            }
+            else if (Scalar(definition, "kind").Equals("Compose", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!definition.Children.TryGetValue(new YamlScalarNode("serviceImages"), out var services)
+                    || services is not YamlMappingNode serviceImages || serviceImages.Children.Count == 0)
+                    errors.Add($"{prefix}: Compose serviceImages must be a non-empty mapping.");
+                else
+                    foreach (var service in serviceImages.Children)
+                        ValidateReference(service.Value, $"runtime.definition.serviceImages.{((YamlScalarNode)service.Key).Value}");
+            }
+        }
+        if (root.Children.TryGetValue(new YamlScalarNode("checker"), out var checkerNode))
+        {
+            var checker = Mapping(checkerNode);
+            if (NormalizeMode(Scalar(root, "mode")) == "Awd"
+                && checker.Children.TryGetValue(new YamlScalarNode("job"), out var job))
+                checker = Mapping(job);
+            checker.Children.TryGetValue(new YamlScalarNode("image"), out var image);
+            ValidateReference(image, "checker.image");
         }
     }
+
+    private static bool IsImageDigest(string? value) => value is not null
+        && Regex.IsMatch(value, @"^[^@\s]+@sha256:[0-9a-fA-F]{64}$");
 
     private static YamlNode LoadYaml(string path)
     {
@@ -148,14 +223,14 @@ internal static partial class RepositoryApp
     private static JsonNode? ScalarToJson(YamlScalarNode scalar)
     {
         var value = scalar.Value;
+        if (scalar.Style is YamlDotNet.Core.ScalarStyle.SingleQuoted or YamlDotNet.Core.ScalarStyle.DoubleQuoted)
+            return JsonValue.Create(value);
         if (value is null or "null" or "~")
             return null;
         if (bool.TryParse(value, out var boolean))
             return JsonValue.Create(boolean);
-        if (long.TryParse(value, out var integer))
-            return JsonValue.Create(integer);
-        if (decimal.TryParse(value, out var number))
-            return JsonValue.Create(number);
+        if (Regex.IsMatch(value, @"^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$"))
+            return JsonNode.Parse(value);
         return JsonValue.Create(value);
     }
 

@@ -9,7 +9,7 @@ challenges:
   - id: 00000000-0000-0000-0000-000000000102
     challenge: examples/ctf-static
     order: 10
-    baseScore: 100
+    customTitle: null
     published: false
     hints:
       - id: 00000000-0000-0000-0000-000000000103
@@ -17,10 +17,11 @@ challenges:
         cost: 10
         publishedAt: null
     rules:
-      schemaVersion: 1
-      points:
+      schemaVersion: 2
+      scoreCurve:
         initialPoints: 100
         minimumPoints: 50
-        decayFactor: 10
+        decayTeamCount: 10
+        decayMode: 2
       bloodRewards: []
       maxFlagAttempts: 20

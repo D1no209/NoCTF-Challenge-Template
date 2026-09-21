@@ -42,7 +42,8 @@ internal static partial class RepositoryApp
                 "build" => await BuildAsync(root, args[1..]),
                 "apply" => await ApplyAsync(root, args[1..]),
                 "readme" => GenerateReadme(root),
-                "self-test" => SelfTest(root),
+                "self-test" => await SelfTestAsync(root),
+                "contract-fixtures" => await ExportContractFixturesAsync(args[1..]),
                 _ => Fail($"Unknown command '{args[0]}'.")
             };
         }
@@ -55,7 +56,7 @@ internal static partial class RepositoryApp
         }
     }
 
-    private static int SelfTest(string root)
+    private static async Task<int> SelfTestAsync(string root)
     {
         var errors = ValidateRepository(root);
         if (errors.Count != 0)
@@ -121,13 +122,12 @@ internal static partial class RepositoryApp
                      "*.yml"))
             ValidateWorkflow(workflow);
         var readme = RenderReadme(root);
-        if (!readme.Contains("Static Example", StringComparison.Ordinal)
-            || !readme.Contains("## Challenges", StringComparison.Ordinal))
+        if (!readme.Contains("## Challenges", StringComparison.Ordinal))
             throw new InvalidOperationException("README rendering failed.");
-        foreach (var example in Directory.EnumerateFiles(
-                     Path.Combine(root, "examples"),
-                     "challenge.example.yml",
-                     SearchOption.AllDirectories))
+        var examples = Path.Combine(root, "examples");
+        foreach (var example in Directory.Exists(examples)
+                     ? Directory.EnumerateFiles(examples, "challenge.example.yml", SearchOption.AllDirectories)
+                     : [])
         {
             var document = ReadChallenge(root, example);
             var exampleErrors = new List<string>();
@@ -149,6 +149,7 @@ internal static partial class RepositoryApp
         catch (InvalidOperationException exception) when (exception.Message.Contains("escapes", StringComparison.Ordinal))
         {
         }
+        await ContractTestsAsync();
         Console.WriteLine("Self-test passed.");
         return 0;
     }
