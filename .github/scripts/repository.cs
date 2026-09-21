@@ -19,5 +19,7 @@
 #:include RepositoryApp.Definition.cs
 #:include RepositoryApp.ManifestTemplates.cs
 #:include NoCtfClient.cs
+#:include RepositoryApp.ContractTests.cs
+#:include RepositoryApp.AuditRegressionTests.cs
 
 return await RepositoryApp.RunAsync(args);

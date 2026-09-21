@@ -63,7 +63,11 @@ internal static partial class RepositoryApp
 
     private static int Plan(string root, string[] args)
     {
-        var selected = args.Contains("--all", StringComparer.Ordinal)
+        var all = args.Contains("--all", StringComparer.Ordinal);
+        var changedFiles = all ? [] : Run(root, "git", ["diff", "--name-only", Required(args, "--base"), Required(args, "--head"), "--"])
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Select(NormalizePath).ToArray();
+        all |= changedFiles.Any(path => path.StartsWith(".github/scripts/", StringComparison.Ordinal));
+        var selected = all
             ? FindChallenges(root).Select(path => Relative(root, Path.GetDirectoryName(path)!)).ToHashSet()
             : DiscoverPaths(root, Required(args, "--base"), Required(args, "--head")).ToHashSet();
         var sha = Option(args, "--sha") ?? Run(root, "git", ["rev-parse", "HEAD"]).Trim();
@@ -75,6 +79,8 @@ internal static partial class RepositoryApp
                 continue;
             foreach (var image in BuildImages(challenge.Root))
             {
+                if (!all && !ImageNeedsBuild(root, challenge, image, Required(args, "--base"), changedFiles))
+                    continue;
                 var sourceHash = SourceHash(challenge.Directory, image);
                 items.Add(new
                 {
@@ -95,6 +101,22 @@ internal static partial class RepositoryApp
         if (args.Contains("--github-output", StringComparer.Ordinal) && !string.IsNullOrEmpty(outputFile))
             File.AppendAllText(outputFile, $"matrix={JsonSerializer.Serialize(items)}{Environment.NewLine}");
         return 0;
+    }
+
+    private static bool ImageNeedsBuild(string root, ChallengeDocument challenge, BuildImage image,
+        string baseRef, IReadOnlyList<string> changedFiles)
+    {
+        var prefix = challenge.RelativeDirectory + "/";
+        if (changedFiles.Any(path => path == prefix + NormalizePath(image.Dockerfile)
+            || path.StartsWith(prefix + NormalizePath(image.Context) + "/", StringComparison.Ordinal)))
+            return true;
+        if (!changedFiles.Contains(prefix + "challenge.yml")) return false;
+        var oldManifestPath = prefix + "challenge.yml";
+        var existing = Run(root, "git", ["ls-tree", "--name-only", baseRef, "--", oldManifestPath]).Trim();
+        if (existing.Length == 0) return true;
+        var previous = Mapping(LoadYamlText(Run(root, "git", ["show", $"{baseRef}:{oldManifestPath}"])));
+        var oldImage = BuildImages(previous).SingleOrDefault(item => item.Key == image.Key);
+        return oldImage is null || JsonSerializer.Serialize(oldImage) != JsonSerializer.Serialize(image);
     }
 
     private static async Task<int> BuildAsync(string root, string[] args)

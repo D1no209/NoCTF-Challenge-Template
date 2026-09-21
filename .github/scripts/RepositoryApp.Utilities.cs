@@ -16,8 +16,17 @@ internal static partial class RepositoryApp
     {
         var fullParent = Path.GetFullPath(parent).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         var full = Path.GetFullPath(Path.Combine(parent, relative));
-        if (!full.StartsWith(fullParent, StringComparison.OrdinalIgnoreCase))
+        if (!full.StartsWith(fullParent, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw new InvalidOperationException($"Path '{relative}' escapes its challenge directory.");
+        var candidate = full;
+        while (candidate.Length >= fullParent.TrimEnd(Path.DirectorySeparatorChar).Length)
+        {
+            if ((File.Exists(candidate) || Directory.Exists(candidate))
+                && (File.GetAttributes(candidate) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Path '{relative}' contains a symbolic link or reparse point.");
+            candidate = Path.GetDirectoryName(candidate)!;
+            if (candidate is null) break;
+        }
         return full;
     }
 

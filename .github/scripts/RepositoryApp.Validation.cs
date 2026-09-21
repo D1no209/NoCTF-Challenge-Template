@@ -71,13 +71,15 @@ internal static partial class RepositoryApp
                     errors.Add($"competition.yml has an invalid or duplicate CompetitionChallenge id '{idText}'.");
                 if (!int.TryParse(Scalar(item, "order"), out var order) || order < 0 || !orders.Add(order))
                     errors.Add($"competition.yml has an invalid or duplicate order for '{challengePath}'.");
-                if (!long.TryParse(Scalar(item, "baseScore"), out var score) || score < 0)
-                    errors.Add($"competition.yml has an invalid baseScore for '{challengePath}'.");
+                if (item.Children.ContainsKey(new YamlScalarNode("baseScore")))
+                    errors.Add($"{challengePath}: baseScore was removed; use mode-specific scoring rules.");
                 if (!item.Children.TryGetValue(new YamlScalarNode("rules"), out var rulesNode)
                     || rulesNode is not YamlMappingNode rules
                     || Scalar(rules, "schemaVersion") !=
-                    (mode.Equals("Awd", StringComparison.OrdinalIgnoreCase) ? "4" : "1"))
+                    RulesSchemaVersion(mode).ToString())
                     errors.Add($"competition.yml has an invalid rules schemaVersion for '{challengePath}'.");
+                else
+                    RequireOnlyKeys(rules, $"{challengePath}.rules", errors, RuleKeys(mode));
                 if (!byPath.TryGetValue(challengePath, out var challenge))
                 {
                     errors.Add($"competition.yml references missing challenge '{challengePath}'.");
@@ -95,6 +97,14 @@ internal static partial class RepositoryApp
                             errors.Add($"{challengePath} has an invalid or duplicate hint id '{hintText}'.");
                         if (!long.TryParse(Scalar(hint, "cost"), out var cost) || cost < 0)
                             errors.Add($"{challengePath} has an invalid hint cost for '{hintText}'.");
+                        if (string.IsNullOrWhiteSpace(Scalar(hint, "content", "")))
+                            errors.Add($"{challengePath}: hint {hintText} requires non-empty content.");
+                        var publishedAt = NullScalar(hint, "publishedAt");
+                        if (publishedAt is not null)
+                        {
+                            try { _ = JsonSerializer.Deserialize<DateTimeOffset>(JsonSerializer.Serialize(publishedAt)); }
+                            catch (JsonException) { errors.Add($"{challengePath}: hint {hintText} publishedAt must be an ISO-8601 timestamp or null."); }
+                        }
                     }
                 }
             }
@@ -115,18 +125,26 @@ internal static partial class RepositoryApp
         List<string> errors)
     {
         var prefix = document.RelativeDirectory;
+        if (!Regex.IsMatch(prefix, @"^[a-z0-9]+(?:-[a-z0-9]+)*/[a-z0-9]+(?:-[a-z0-9]+)*$"))
+            errors.Add($"{prefix}: challenge paths must use safe lowercase direction/slug segments.");
         RequireOnlyKeys(
             document.Root,
             prefix,
             errors,
             "apiVersion", "kind", "id", "mode", "title", "direction", "visibility",
             "statement", "attachments", "flags", "build", "runtime", "checker",
-            "flagTemplate", "flagInjection", "patch");
+            "flagInjection", "patch", "checkerFixInput");
         if (Scalar(document.Root, "apiVersion") != "gitops.noctf.dev/v1")
             errors.Add($"{prefix}: apiVersion must be gitops.noctf.dev/v1.");
         if (Scalar(document.Root, "kind") != "ChallengeTemplate")
             errors.Add($"{prefix}: kind must be ChallengeTemplate.");
-        if (!challengeIds.Add(document.Id))
+        if (string.IsNullOrWhiteSpace(Scalar(document.Root, "title")) || Scalar(document.Root, "title").Length > 160)
+            errors.Add($"{prefix}: title is required and must not exceed 160 characters.");
+        if (Scalar(document.Root, "direction").Length > 96)
+            errors.Add($"{prefix}: direction must not exceed 96 characters.");
+        if (Scalar(document.Root, "visibility") is not ("Private" or "Shared"))
+            errors.Add($"{prefix}: visibility must be Private or Shared.");
+        if (document.Id == Guid.Empty || !challengeIds.Add(document.Id))
             errors.Add($"{prefix}: duplicate Challenge id {document.Id}.");
         if (!string.Equals(document.Mode, competitionMode, StringComparison.OrdinalIgnoreCase))
             errors.Add($"{prefix}: mode {document.Mode} does not match competition mode {competitionMode}.");
@@ -151,6 +169,8 @@ internal static partial class RepositoryApp
             if (!Guid.TryParse(idText, out var id) || !attachmentIds.Add(id))
                 errors.Add($"{prefix}: invalid or duplicate attachment id '{idText}'.");
             var file = SafeChildPath(document.Directory, Scalar(attachment, "path"));
+            if (!NormalizePath(Scalar(attachment, "path")).StartsWith("attachments/", StringComparison.Ordinal))
+                errors.Add($"{prefix}: participant attachments must be inside attachments/, never solution/ or runtime/.");
             if (!File.Exists(file))
                 errors.Add($"{prefix}: attachment '{Relative(document.Directory, file)}' is missing.");
         }
@@ -165,6 +185,12 @@ internal static partial class RepositoryApp
 
         var hasRuntime = document.Root.Children.ContainsKey(new YamlScalarNode("runtime"));
         var hasChecker = document.Root.Children.ContainsKey(new YamlScalarNode("checker"));
+        if (hasRuntime && Sequence(document.Root, "flags").Count > 0)
+            errors.Add($"{prefix}: dynamic Runtime Flags are generated by NoCTF; template static flags must be empty.");
+        if (document.Root.Children.ContainsKey(new YamlScalarNode("checkerFixInput"))
+            && (document.Mode != "Awdp" || !hasChecker
+                || !bool.TryParse(Scalar(document.Root, "checkerFixInput"), out _)))
+            errors.Add($"{prefix}: checkerFixInput must be a boolean on an AWDP challenge with a Checker.");
         if (hasRuntime)
             ValidateRuntime(document, prefix, errors);
         switch (document.Mode.ToLowerInvariant())
@@ -185,6 +211,8 @@ internal static partial class RepositoryApp
 
         foreach (var image in BuildImages(document.Root))
         {
+            if (!Regex.IsMatch(image.Key, @"^[a-z0-9]+(?:-[a-z0-9]+)*$") || image.Key.Length > 64)
+                errors.Add($"{prefix}: build image keys must be safe lowercase identifiers, at most 64 characters.");
             var context = SafeChildPath(document.Directory, image.Context);
             var dockerfile = SafeChildPath(document.Directory, image.Dockerfile);
             if (!Directory.Exists(context))
@@ -194,4 +222,13 @@ internal static partial class RepositoryApp
         }
         ValidateImageReferences(document.Root, BuildImages(document.Root).Select(item => item.Key).ToHashSet(), prefix, errors);
     }
+
+    private static string[] RuleKeys(string mode) => NormalizeMode(mode) switch
+    {
+        "Ctf" => ["schemaVersion", "scoreCurve", "bloodRewards", "maxFlagAttempts", "wrongSubmissionPenalty", "flagTemplate"],
+        "Awd" => ["schemaVersion", "attackRewardMode", "attackPoints", "victimDefensePoolPoints", "checkerIntervalSeconds", "serviceHealthyPoints", "serviceUnhealthyPenalty", "flagTemplate"],
+        "Awdp" => ["schemaVersion", "break", "fix", "requireBreakBeforeFix", "maxBreakSubmissions", "maxFixSubmissions", "flagWrongPenalty", "exploitSucceededPenalty", "serviceAbnormalPenalty", "evaluationDispatchMode", "maximumPatchUploadBytes", "flagTemplate"],
+        "Koh" => ["schemaVersion", "pollIntervalSeconds", "controlPointsPerInterval"],
+        _ => []
+    };
 }

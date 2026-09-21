@@ -15,6 +15,18 @@ internal static partial class RepositoryApp
     private static async Task<int> ApplyAsync(string root, string[] args)
     {
         ApplySummary.Clear();
+        var validationErrors = ValidateRepository(root);
+        if (validationErrors.Count > 0)
+            throw new InvalidOperationException(string.Join(Environment.NewLine, validationErrors));
+        var @base = Option(args, "--base");
+        var head = Option(args, "--head");
+        if ((@base is null) != (head is null))
+            throw new InvalidOperationException("Deletion evidence requires both --base and --head.");
+        if (@base is not null && head is not null)
+        {
+            @base = Run(root, "git", ["rev-parse", "--verify", "--end-of-options", $"{@base}^{{commit}}"]).Trim();
+            head = Run(root, "git", ["rev-parse", "--verify", "--end-of-options", $"{head}^{{commit}}"]).Trim();
+        }
         var apiUrl = Option(args, "--api-url")
             ?? Environment.GetEnvironmentVariable("NOCTF_API_URL")
             ?? throw new InvalidOperationException("NOCTF_API_URL is required.");
@@ -22,20 +34,69 @@ internal static partial class RepositoryApp
             ?? throw new InvalidOperationException("NOCTF_BOT_TOKEN is required.");
         using var client = new NoCtfClient(apiUrl, token);
         var competition = Mapping(LoadYaml(Path.Combine(root, "competition.yml")));
+        if (!bool.TryParse(Scalar(competition, "initialized", "false"), out var initialized) || !initialized)
+            throw new InvalidOperationException("Initialize the competition repository before Apply.");
         var competitionId = Guid.Parse(Scalar(competition, "competitionId"));
+        var identity = await client.GetAsync("/api/v1/auth/me");
         var competitionState = await client.GetAsync($"/api/v1/admin/competitions/{competitionId}");
-        var status = competitionState?["status"]?.ToString();
+        RequireCompetitionManagement(competitionState!);
+        var competitionResource = CompetitionResource(competitionState!);
+        if (NormalizeApiMode(competitionResource["mode"]!.ToString()) != NormalizeMode(Scalar(competition, "mode")))
+            throw new InvalidOperationException("Manifest mode does not match the NoCTF competition.");
+        var status = competitionResource["status"]?.ToString();
         if (string.Equals(status, "Finished", StringComparison.OrdinalIgnoreCase) || status == "5")
             throw new InvalidOperationException("Finished competitions cannot be changed by GitOps.");
 
         var challengeDocuments = FindChallenges(root)
             .Select(path => ReadChallenge(root, path))
             .ToDictionary(item => item.RelativeDirectory);
+        var currentInstances = await client.GetItemsAsync($"/api/v1/admin/competitions/{competitionId}/challenges?includeDeleted=true");
+        var desiredInstances = Sequence(competition, "challenges").Select(item => Guid.Parse(Scalar(item, "id"))).ToHashSet();
+        foreach (var removed in currentInstances.Where(item => item["deletedAt"] is null
+            && !desiredInstances.Contains(item["id"]!.GetValue<Guid>())))
+            ApplySummary.Add($"CompetitionChallenge `{removed["id"]}` planned for soft deletion (absent from the complete manifest).");
+        foreach (var entry in Sequence(competition, "challenges"))
+        {
+            var id = Guid.Parse(Scalar(entry, "id"));
+            var existing = currentInstances.SingleOrDefault(item => item["id"]!.GetValue<Guid>() == id);
+            var template = challengeDocuments[NormalizePath(Scalar(entry, "challenge"))];
+            if (existing is not null && existing["challengeId"]!.GetValue<Guid>() != template.Id)
+                throw new InvalidOperationException($"CompetitionChallenge {id} already belongs to another Challenge.");
+        }
+        var prepared = new List<(ChallengeDocument Document, string Definition, string Statement)>();
         foreach (var document in challengeDocuments.Values)
-            await ApplyChallengeAsync(client, document);
+        {
+            var definition = MaterializeDefinition(document);
+            var current = await client.GetAsync($"/api/v1/admin/challenges/{document.Id}?includeDeleted=true", allowNotFound: true);
+            if (current is not null)
+            {
+                RequireChallengeManagement(current, identity!);
+                await ValidateAttachmentIdentitiesAsync(client, document);
+            }
+            var entry = Sequence(competition, "challenges").SingleOrDefault(item =>
+                NormalizePath(Scalar(item, "challenge")) == document.RelativeDirectory);
+            if (entry is not null) _ = MaterializeRules(entry, document.Mode);
+            // Only ordinary read/CRUD APIs are used. Full mode validation remains in each write endpoint.
+            prepared.Add((document, definition, await File.ReadAllTextAsync(
+                SafeChildPath(document.Directory, Scalar(document.Root, "statement")))));
+            ApplySummary.Add($"Challenge `{document.RelativeDirectory}`: local/read-only checks passed; {(current is null ? "create" : current["deletedAt"] is not null ? "restore/reconcile" : "reconcile existing UUID")}.");
+        }
+        if (args.Contains("--dry-run", StringComparer.Ordinal))
+        {
+            foreach (var message in ApplySummary) Console.WriteLine(message);
+            WriteApplySummary("Local/read-only checks succeeded. No resources were changed; write-time server validation is still required.");
+            Console.WriteLine("Local/read-only checks passed. No resources were changed; write-time server validation is still required.");
+            return 0;
+        }
+        foreach (var item in prepared)
+            await ApplyChallengeAsync(client, item.Document, item.Definition, item.Statement, identity!);
         await ApplyCompetitionChallengesAsync(client, competitionId, competition, challengeDocuments);
-        var @base = Option(args, "--base");
-        var head = Option(args, "--head");
+        foreach (var item in prepared)
+        {
+            var current = await client.GetAsync($"/api/v1/admin/challenges/{item.Document.Id}");
+            await UpdateChallengeMetadataAsync(client, item.Document, current!, item.Definition, item.Statement,
+                Scalar(item.Document.Root, "visibility"));
+        }
         if (@base is not null && head is not null)
             await DeleteRemovedChallengesAsync(
                 client,
@@ -48,17 +109,15 @@ internal static partial class RepositoryApp
         return 0;
     }
 
-    private static async Task ApplyChallengeAsync(NoCtfClient client, ChallengeDocument document)
+    private static async Task ApplyChallengeAsync(NoCtfClient client, ChallengeDocument document,
+        string definitionJson, string statement, JsonObject identity)
     {
         var current = await client.GetAsync(
             $"/api/v1/admin/challenges/{document.Id}?includeDeleted=true",
             allowNotFound: true);
-        var definitionJson = MaterializeDefinition(document);
-        var statement = await File.ReadAllTextAsync(
-            SafeChildPath(document.Directory, Scalar(document.Root, "statement")));
         if (current is null)
         {
-            current = await client.SendAsync(HttpMethod.Post, "/api/v1/admin/challenges", new
+            current = await client.CreateAsync("/api/v1/admin/challenges", new
             {
                 id = document.Id,
                 mode = document.Mode,
@@ -67,9 +126,12 @@ internal static partial class RepositoryApp
                 description = statement,
                 direction = Scalar(document.Root, "direction"),
                 definitionJson
-            });
+            }, $"/api/v1/admin/challenges/{document.Id}", candidate =>
+                candidate["ownerId"]!.GetValue<Guid>() == identity["userId"]!.GetValue<Guid>()
+                && ChallengeMetadataMatches(candidate, document, definitionJson, statement, "Private"));
         }
-        else if (current["deletedAt"] is not null)
+        RequireChallengeManagement(current!, identity);
+        if (current!["deletedAt"] is not null)
         {
             await client.SendAsync(HttpMethod.Post, $"/api/v1/admin/challenges/{document.Id}/restore");
             current = await client.GetAsync($"/api/v1/admin/challenges/{document.Id}");
@@ -86,17 +148,10 @@ internal static partial class RepositoryApp
             return;
         }
 
-        current = await UpdateChallengeMetadataAsync(client, document, current!, definitionJson, statement, "Private");
+        current = await UpdateChallengeMetadataAsync(client, document, current!, definitionJson, statement,
+            current!["visibility"]!.GetValue<string>());
         await ApplyAttachmentsAsync(client, document);
         await ApplyFlagsAsync(client, document);
-        current = await client.GetAsync($"/api/v1/admin/challenges/{document.Id}");
-        await UpdateChallengeMetadataAsync(
-            client,
-            document,
-            current!,
-            definitionJson,
-            statement,
-            Scalar(document.Root, "visibility"));
         ApplySummary.Add($"Challenge `{document.RelativeDirectory}` converged.");
     }
 
@@ -110,15 +165,17 @@ internal static partial class RepositoryApp
     {
         if (ChallengeMetadataMatches(current, document, definitionJson, statement, visibility))
             return current;
-        return await client.SendAsync(HttpMethod.Put, $"/api/v1/admin/challenges/{document.Id}", new
+        return await client.SendAsync(HttpMethod.Patch, $"/api/v1/admin/challenges/{document.Id}", new
         {
-            mode = document.Mode,
-            visibility,
-            title = Scalar(document.Root, "title"),
-            description = statement,
-            direction = Scalar(document.Root, "direction"),
-            definitionJson,
-            expectedRevision = current["revision"]!.GetValue<int>()
+            content = new
+            {
+                mode = document.Mode,
+                visibility,
+                title = Scalar(document.Root, "title"),
+                description = statement,
+                direction = Scalar(document.Root, "direction"),
+                definitionJson
+            }
         });
     }
 
@@ -166,7 +223,8 @@ internal static partial class RepositoryApp
         string definitionJson,
         string statement,
         string visibility) =>
-        TextEquals(current, "visibility", visibility)
+        TextEquals(current, "mode", document.Mode)
+        && TextEquals(current, "visibility", visibility)
         && TextEquals(current, "title", Scalar(document.Root, "title"))
         && TextEquals(current, "description", statement)
         && TextEquals(current, "direction", Scalar(document.Root, "direction"))
@@ -176,8 +234,7 @@ internal static partial class RepositoryApp
         NoCtfClient client,
         ChallengeDocument document)
     {
-        var attachments = await client.GetItemsAsync(
-            $"/api/v1/admin/challenges/{document.Id}/attachments?includeDeleted=true");
+        var attachments = await GetManagedAttachmentsAsync(client, document.Id);
         var desiredAttachments = Sequence(document.Root, "attachments")
             .ToDictionary(item => Guid.Parse(Scalar(item, "id")));
         if (attachments.Any(item =>
@@ -210,8 +267,31 @@ internal static partial class RepositoryApp
                    return current is not null
                           && current["deletedAt"] is null
                           && TextEquals(current, "flag", Scalar(pair.Value, "value"))
+                          && TextEquals(current, "matchKind", Scalar(pair.Value, "matchKind", "Exact"))
                           && current["specificationKind"] is null
                           && current["specificationId"] is null;
                });
+    }
+
+    private static void RequireCompetitionManagement(JsonObject competition)
+    {
+        if (competition["capabilities"]?["canModerate"]?.GetValue<bool>() != true)
+            throw new InvalidOperationException("GitOps requires competition Owner or Manager permission; read-only Judge/Observer access is insufficient.");
+        if (CompetitionResource(competition)["deletedAt"] is not null)
+            throw new InvalidOperationException("A deleted competition cannot be managed by GitOps.");
+    }
+
+    private static JsonObject CompetitionResource(JsonObject response) =>
+        response["competition"]?.AsObject()
+        ?? throw new InvalidOperationException("NoCTF returned an invalid competition response.");
+
+    private static void RequireChallengeManagement(JsonObject challenge, JsonObject identity)
+    {
+        var actorId = identity["userId"]!.GetValue<Guid>();
+        if (identity["role"]?.ToString() == "Administrator"
+            || challenge["ownerId"]!.GetValue<Guid>() == actorId
+            || challenge["managerIds"]!.AsArray().Any(id => id!.GetValue<Guid>() == actorId))
+            return;
+        throw new InvalidOperationException($"Challenge {challenge["id"]}: the Bot needs independent template Owner/Manager permission; competition Manager is not enough.");
     }
 }

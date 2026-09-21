@@ -12,18 +12,18 @@ using YamlDotNet.RepresentationModel;
 
 internal static partial class RepositoryApp
 {
-    private static string MaterializeDefinition(ChallengeDocument document)
+    private static string MaterializeDefinition(ChallengeDocument document, Func<BuildImage, string>? resolveImage = null)
     {
         var output = new JsonObject
         {
-            ["schemaVersion"] = document.Mode.Equals("Awd", StringComparison.OrdinalIgnoreCase) ? 4 : 1
+            ["schemaVersion"] = DefinitionSchemaVersion(document.Mode)
         };
-        foreach (var key in new[] { "runtime", "checker", "flagTemplate", "flagInjection", "patch", "controlCheck" })
+        foreach (var key in new[] { "runtime", "checker", "checkerFixInput", "flagInjection", "patch" })
         {
             if (document.Root.Children.TryGetValue(new YamlScalarNode(key), out var value))
                 output[key] = YamlToJson(value);
         }
-        ReplaceBuildImages(output, document);
+        ReplaceBuildImages(output, document, resolveImage);
         CanonicalizeDefinition(output, document);
         return output.ToJsonString(JsonOptions);
     }
@@ -68,9 +68,9 @@ internal static partial class RepositoryApp
                 var protocol = endpoint["protocol"]?.ToString() ?? "Http";
                 var port = endpoint["containerPort"]!.GetValue<int>();
                 var serviceName = endpoint["serviceName"]?.ToString();
-                var template = protocol.Equals("Http", StringComparison.OrdinalIgnoreCase)
+                var template = endpoint["urlTemplate"]?.ToString() ?? (protocol.Equals("Http", StringComparison.OrdinalIgnoreCase)
                     ? "http://{HOST}:{PORT}/"
-                    : "tcp://{HOST}:{PORT}";
+                    : "tcp://{HOST}:{PORT}");
                 bindings.Add(new JsonObject
                 {
                     ["urlTemplate"] = template,
@@ -163,26 +163,39 @@ internal static partial class RepositoryApp
                 ? match.Value
                 : throw new InvalidOperationException($"Unsupported enum value '{value}'.");
 
-    private static void ReplaceBuildImages(JsonNode node, ChallengeDocument document)
+    private static void ReplaceBuildImages(JsonNode node, ChallengeDocument document, Func<BuildImage, string>? resolveImage = null)
     {
-        if (node is JsonObject obj)
+        string ResolveReference(JsonNode? node)
         {
-            if (obj.Count == 1 && obj["build"] is JsonValue buildValue)
+            if (node is not JsonObject reference || reference.Count != 1)
+                throw new InvalidOperationException("Image references must contain exactly one build or external entry.");
+            if (reference["external"] is JsonValue external && external.TryGetValue<string>(out var digest)
+                && IsImageDigest(digest))
+                return digest;
+            if (reference["build"] is JsonValue value && value.TryGetValue<string>(out var key))
             {
-                var key = buildValue.GetValue<string>();
-                var image = BuildImages(document.Root).Single(item => item.Key == key);
-                node.ReplaceWith(JsonValue.Create(ResolveImage(document, image)));
-                return;
+                var image = BuildImages(document.Root).SingleOrDefault(item => item.Key == key)
+                    ?? throw new InvalidOperationException("Image references an undeclared build key.");
+                var resolved = resolveImage is null ? ResolveImage(document, image) : resolveImage(image);
+                if (!IsImageDigest(resolved))
+                    throw new InvalidOperationException("The resolved build image does not contain a sha256 digest.");
+                return resolved;
             }
-            foreach (var child in obj.ToArray())
-                if (child.Value is not null)
-                    ReplaceBuildImages(child.Value, document);
+            throw new InvalidOperationException("External images must be pinned to a sha256 digest.");
         }
-        else if (node is JsonArray array)
+        if (node["runtime"]?["definition"] is JsonObject definition)
         {
-            foreach (var child in array.ToArray())
-                if (child is not null)
-                    ReplaceBuildImages(child, document);
+            if (definition["kind"]?.ToString().Equals("Container", StringComparison.OrdinalIgnoreCase) == true)
+                definition["image"] = ResolveReference(definition["image"]);
+            else if (definition["kind"]?.ToString().Equals("Compose", StringComparison.OrdinalIgnoreCase) == true
+                && definition["serviceImages"] is JsonObject images)
+                foreach (var service in images.ToArray())
+                    images[service.Key] = ResolveReference(service.Value);
+        }
+        if (node["checker"] is JsonObject checker)
+        {
+            var job = document.Mode == "Awd" ? checker["job"]!.AsObject() : checker;
+            job["image"] = ResolveReference(job["image"]);
         }
     }
 
@@ -225,5 +238,31 @@ internal static partial class RepositoryApp
             tags.Add($"{host}/{ns}/{suffix}:git-{sha}");
         }
         return tags;
+    }
+
+    private static int DefinitionSchemaVersion(string mode) => NormalizeMode(mode) switch
+    {
+        "Ctf" => 3,
+        "Awd" or "Awdp" => 4,
+        "Koh" => 1,
+        _ => throw new InvalidOperationException("Unsupported mode.")
+    };
+
+    private static int RulesSchemaVersion(string mode) => NormalizeMode(mode) switch
+    {
+        "Ctf" => 2,
+        "Awd" or "Awdp" => 4,
+        "Koh" => 1,
+        _ => throw new InvalidOperationException("Unsupported mode.")
+    };
+
+    private static string MaterializeRules(YamlMappingNode entry, string mode)
+    {
+        if (entry.Children.ContainsKey(new YamlScalarNode("baseScore")))
+            throw new InvalidOperationException("baseScore is obsolete. Put scores in mode-specific rules (CTF scoreCurve; AWDP break/fix; AWD attackPoints; KoH controlPointsPerInterval).");
+        var rules = YamlToJson(entry.Children[new YamlScalarNode("rules")])!.AsObject();
+        if (rules["schemaVersion"]?.GetValue<int>() != RulesSchemaVersion(mode))
+            throw new InvalidOperationException($"{mode} rules require schemaVersion {RulesSchemaVersion(mode)}.");
+        return rules.ToJsonString(JsonOptions);
     }
 }
