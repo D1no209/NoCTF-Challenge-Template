@@ -1,4 +1,4 @@
-apiVersion: gitops.noctf.dev/v1
+apiVersion: gitops.noctf.dev/v2
 kind: ChallengeTemplate
 id: 00000000-0000-0000-0000-000000000101
 mode: Ctf
@@ -10,3 +10,7 @@ attachments: []
 flags:
   - id: 00000000-0000-0000-0000-000000000104
     value: flag{replace_this_example}
+definition:
+  mode: Ctf
+  ctf:
+    interactionKind: FlagSubmission

@@ -12,117 +12,71 @@ using YamlDotNet.RepresentationModel;
 
 internal static partial class RepositoryApp
 {
-    private static string MaterializeDefinition(ChallengeDocument document, Func<BuildImage, string>? resolveImage = null)
+    private static JsonObject MaterializeDefinition(
+        ChallengeDocument document,
+        Func<BuildImage, string>? resolveImage = null)
     {
-        var output = new JsonObject
-        {
-            ["schemaVersion"] = DefinitionSchemaVersion(document.Mode)
-        };
-        foreach (var key in new[] { "runtime", "checker", "checkerFixInput", "flagInjection", "patch" })
-        {
-            if (document.Root.Children.TryGetValue(new YamlScalarNode(key), out var value))
-                output[key] = YamlToJson(value);
-        }
+        var output = YamlToJson(
+            document.Root.Children[new YamlScalarNode("definition")])!.AsObject();
         ReplaceBuildImages(output, document, resolveImage);
-        CanonicalizeDefinition(output, document);
-        return output.ToJsonString(JsonOptions);
+        MaterializeComposeDefinition(output, document);
+        CanonicalizeDefinition(output);
+        return output;
     }
 
-    private static void CanonicalizeDefinition(JsonObject output, ChallengeDocument document)
+    private static void CanonicalizeDefinition(JsonObject definition)
     {
-        if (output["patch"] is JsonObject patch)
+        definition["flagTemplate"] ??= null;
+        definition["runtime"] ??= null;
+        definition["checker"] ??= null;
+        definition["patchEntrypoint"] ??= null;
+        definition["patchCommand"] ??= new JsonArray();
+        definition["patchTimeoutSeconds"] ??= null;
+        definition["readyTimeoutSeconds"] ??= null;
+        definition["maximumPatchUploadBytes"] ??= null;
+        definition["checkerFixInput"] ??= false;
+        definition["checkerAllowRoot"] ??= false;
+        foreach (var branch in new[] { "ctf", "awd", "awdp", "koh" })
+            definition[branch] ??= null;
+        if (definition["awd"] is JsonObject awd)
+            awd["flagInjection"] ??= null;
+        if (definition["checker"] is JsonObject checker)
         {
-            output["patchEntrypoint"] = patch["entrypoint"]?.DeepClone();
-            output["patchCommand"] = patch["command"]?.DeepClone();
-            output["patchTimeoutSeconds"] = patch["timeoutSeconds"]?.DeepClone();
-            output["readyTimeoutSeconds"] = patch["readyTimeoutSeconds"]?.DeepClone();
-            output.Remove("patch");
+            checker["command"] ??= new JsonArray();
+            checker["environment"] ??= new JsonObject();
+            checker["targetServiceName"] ??= null;
         }
-        if (output["runtime"] is not JsonObject runtime)
+        if (definition["runtime"] is not JsonObject runtime)
             return;
-
-        runtime["allocation"] = EnumNumber(
-            runtime["allocation"]?.ToString(),
-            ("Shared", 0),
-            ("PerTeam", 1));
-        if (runtime["flagSource"] is not null)
-            runtime["flagSource"] = EnumNumber(
-                runtime["flagSource"]?.ToString(),
-                ("Static", 0),
-                ("PerTeam", 1),
-                ("AwdRotation", 2));
-        if (runtime["definition"] is not JsonObject definition)
-            return;
-        definition["kind"] = definition["kind"]?.ToString().ToLowerInvariant();
-        definition["environment"] ??= new JsonObject();
-        definition["labels"] ??= new JsonObject();
-        definition["egressPolicy"] ??= 0;
-
-        var endpoints = runtime["endpoints"] as JsonArray;
-        if (endpoints is not null)
-        {
-            var bindings = new JsonArray();
-            var portMappings = new JsonObject();
-            foreach (var endpoint in endpoints.OfType<JsonObject>())
+        runtime["ttlSeconds"] ??= null;
+        runtime["operationTimeoutSeconds"] ??= null;
+        runtime["flagSource"] ??= "Static";
+        runtime["egressPolicy"] ??= "Isolated";
+        foreach (var branch in new[] { "container", "compose", "ova" })
+            runtime[branch] ??= null;
+        if (runtime["urlBindings"] is JsonArray bindings)
+            foreach (var binding in bindings.OfType<JsonObject>())
             {
-                var protocol = endpoint["protocol"]?.ToString() ?? "Http";
-                var port = endpoint["containerPort"]!.GetValue<int>();
-                var serviceName = endpoint["serviceName"]?.ToString();
-                var template = endpoint["urlTemplate"]?.ToString() ?? (protocol.Equals("Http", StringComparison.OrdinalIgnoreCase)
-                    ? "http://{HOST}:{PORT}/"
-                    : "tcp://{HOST}:{PORT}");
-                bindings.Add(new JsonObject
-                {
-                    ["urlTemplate"] = template,
-                    ["exposure"] = EnumNumber(
-                        endpoint["exposure"]?.ToString(),
-                        ("OwnerOnly", 0),
-                        ("Participants", 1)),
-                    ["containerPort"] = port,
-                    ["serviceName"] = serviceName
-                });
-                if (string.Equals(definition["kind"]?.ToString(), "container", StringComparison.Ordinal))
-                    portMappings[port.ToString()] = 0;
+                binding["containerPort"] ??= null;
+                binding["serviceName"] ??= null;
+                binding["vmId"] ??= null;
+                binding["guestPort"] ??= null;
+                binding["isControlCheck"] ??= false;
             }
-            runtime["urlBindings"] = bindings;
-            runtime.Remove("endpoints");
-            if (definition["kind"]?.ToString() == "container")
-                definition["portMappings"] = portMappings;
-        }
-        else if (definition["kind"]?.ToString() == "container")
-        {
-            definition["portMappings"] ??= new JsonObject();
-        }
-
-        if (runtime["controlCheck"] is JsonObject control)
-        {
-            var port = control["containerPort"]!.GetValue<int>();
-            runtime["controlCheckUrlBinding"] = new JsonObject
-            {
-                ["urlTemplate"] = $"http://{{HOST}}:{{PORT}}{control["path"]?.ToString() ?? "/"}",
-                ["exposure"] = 0,
-                ["containerPort"] = port
-            };
-            runtime.Remove("controlCheck");
-            if (definition["kind"]?.ToString() == "container")
-                ((JsonObject)definition["portMappings"]!)[port.ToString()] = 0;
-        }
-
-        if (definition["kind"]?.ToString() == "compose")
-            MaterializeComposeDefinition(document, runtime, definition);
     }
 
     private static void MaterializeComposeDefinition(
-        ChallengeDocument document,
-        JsonObject runtime,
-        JsonObject definition)
+        JsonObject output,
+        ChallengeDocument document)
     {
-        var relativeFile = definition["file"]?.ToString()
+        if (output["runtime"]?["compose"] is not JsonObject compose)
+            return;
+        var relativeFile = compose["file"]?.ToString()
             ?? throw new InvalidOperationException(
                 $"{document.RelativeDirectory}: Compose definition requires file.");
         var composeRoot = Mapping(LoadYaml(SafeChildPath(document.Directory, relativeFile)));
         var services = Mapping(composeRoot.Children[new YamlScalarNode("services")]);
-        var serviceImages = definition["serviceImages"] as JsonObject
+        var serviceImages = compose["serviceImages"] as JsonObject
             ?? throw new InvalidOperationException(
                 $"{document.RelativeDirectory}: Compose definition requires serviceImages.");
         foreach (var servicePair in services.Children)
@@ -136,32 +90,10 @@ internal static partial class RepositoryApp
         }
         using var writer = new StringWriter();
         new YamlStream(new YamlDocument(composeRoot)).Save(writer, assignAnchors: false);
-        definition["composeYaml"] = writer.ToString();
-        definition.Remove("file");
-        definition.Remove("serviceImages");
-
-        var limits = runtime["limits"] as JsonObject
-            ?? throw new InvalidOperationException(
-                $"{document.RelativeDirectory}: Compose runtime requires limits.");
-        var resources = definition["serviceResources"] as JsonObject;
-        if (resources is null)
-        {
-            if (services.Children.Count != 1)
-                throw new InvalidOperationException(
-                    $"{document.RelativeDirectory}: multi-service Compose requires definition.serviceResources.");
-            resources = new JsonObject();
-            resources[((YamlScalarNode)services.Children.Keys.Single()).Value!] =
-                limits.DeepClone();
-        }
-        definition["serviceResources"] = resources;
+        compose["composeYaml"] = writer.ToString();
+        compose.Remove("file");
+        compose.Remove("serviceImages");
     }
-
-    private static int EnumNumber(string? value, params (string Name, int Value)[] values) =>
-        values.FirstOrDefault(item =>
-            string.Equals(item.Name, value, StringComparison.OrdinalIgnoreCase)) is var match
-            && match.Name is not null
-                ? match.Value
-                : throw new InvalidOperationException($"Unsupported enum value '{value}'.");
 
     private static void ReplaceBuildImages(JsonNode node, ChallengeDocument document, Func<BuildImage, string>? resolveImage = null)
     {
@@ -183,19 +115,17 @@ internal static partial class RepositoryApp
             }
             throw new InvalidOperationException("External images must be pinned to a sha256 digest.");
         }
-        if (node["runtime"]?["definition"] is JsonObject definition)
+        if (node["runtime"] is JsonObject runtime)
         {
-            if (definition["kind"]?.ToString().Equals("Container", StringComparison.OrdinalIgnoreCase) == true)
-                definition["image"] = ResolveReference(definition["image"]);
-            else if (definition["kind"]?.ToString().Equals("Compose", StringComparison.OrdinalIgnoreCase) == true
-                && definition["serviceImages"] is JsonObject images)
+            if (runtime["container"] is JsonObject container)
+                container["image"] = ResolveReference(container["image"]);
+            else if (runtime["compose"]?["serviceImages"] is JsonObject images)
                 foreach (var service in images.ToArray())
                     images[service.Key] = ResolveReference(service.Value);
         }
         if (node["checker"] is JsonObject checker)
         {
-            var job = document.Mode == "Awd" ? checker["job"]!.AsObject() : checker;
-            job["image"] = ResolveReference(job["image"]);
+            checker["image"] = ResolveReference(checker["image"]);
         }
     }
 
@@ -240,29 +170,52 @@ internal static partial class RepositoryApp
         return tags;
     }
 
-    private static int DefinitionSchemaVersion(string mode) => NormalizeMode(mode) switch
-    {
-        "Ctf" => 3,
-        "Awd" or "Awdp" => 4,
-        "Koh" => 1,
-        _ => throw new InvalidOperationException("Unsupported mode.")
-    };
-
-    private static int RulesSchemaVersion(string mode) => NormalizeMode(mode) switch
-    {
-        "Ctf" => 2,
-        "Awd" or "Awdp" => 4,
-        "Koh" => 1,
-        _ => throw new InvalidOperationException("Unsupported mode.")
-    };
-
-    private static string MaterializeRules(YamlMappingNode entry, string mode)
+    private static JsonObject MaterializeRules(YamlMappingNode entry, string mode)
     {
         if (entry.Children.ContainsKey(new YamlScalarNode("baseScore")))
-            throw new InvalidOperationException("baseScore is obsolete. Put scores in mode-specific rules (CTF scoreCurve; AWDP break/fix; AWD attackPoints; KoH controlPointsPerInterval).");
+            throw new InvalidOperationException("baseScore is obsolete. Put scores in the typed mode branch (CTF scoreCurve; AWDP breakScoreCurve/fixScoreCurve; AWD attackPoints; KoH controlPointsPerInterval).");
         var rules = YamlToJson(entry.Children[new YamlScalarNode("rules")])!.AsObject();
-        if (rules["schemaVersion"]?.GetValue<int>() != RulesSchemaVersion(mode))
-            throw new InvalidOperationException($"{mode} rules require schemaVersion {RulesSchemaVersion(mode)}.");
-        return rules.ToJsonString(JsonOptions);
+        if (!string.Equals(rules["mode"]?.ToString(), NormalizeMode(mode), StringComparison.Ordinal))
+            throw new InvalidOperationException($"{mode} rules must declare the matching mode.");
+        CanonicalizeRules(rules);
+        return rules;
+    }
+
+    private static void CanonicalizeRules(JsonObject rules)
+    {
+        foreach (var branch in new[] { "ctf", "awd", "awdp", "koh" })
+            rules[branch] ??= null;
+        if (rules["ctf"] is JsonObject ctf)
+        {
+            AddNulls(ctf, "scoreCurve", "bloodRewards", "maxFlagAttempts", "maxPatchAttempts",
+                "wrongSubmissionPenalty", "flagTemplate");
+            if (ctf["bloodRewards"] is JsonArray { Count: 0 }) ctf["bloodRewards"] = null;
+            CanonicalizeCurve(ctf["scoreCurve"]);
+        }
+        if (rules["awd"] is JsonObject awd)
+            AddNulls(awd, "attackRewardMode", "attackPoints", "victimDefensePoolPoints",
+                "checkerIntervalSeconds", "serviceHealthyPoints", "serviceUnhealthyPenalty", "flagTemplate");
+        if (rules["awdp"] is JsonObject awdp)
+        {
+            AddNulls(awdp, "breakScoreCurve", "fixScoreCurve", "maxBreakSubmissions",
+                "maxFixSubmissions", "requireBreakBeforeFix", "flagWrongPenalty",
+                "exploitSucceededPenalty", "serviceAbnormalPenalty", "evaluationDispatchMode", "flagTemplate");
+            CanonicalizeCurve(awdp["breakScoreCurve"]);
+            CanonicalizeCurve(awdp["fixScoreCurve"]);
+        }
+        if (rules["koh"] is JsonObject koh)
+            AddNulls(koh, "pollIntervalSeconds", "controlPointsPerInterval");
+    }
+
+    private static void AddNulls(JsonObject value, params string[] properties)
+    {
+        foreach (var property in properties)
+            value[property] ??= null;
+    }
+
+    private static void CanonicalizeCurve(JsonNode? value)
+    {
+        if (value is JsonObject curve)
+            curve["customExpression"] ??= null;
     }
 }

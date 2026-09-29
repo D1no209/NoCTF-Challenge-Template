@@ -1,4 +1,4 @@
-apiVersion: gitops.noctf.dev/v1
+apiVersion: gitops.noctf.dev/v2
 kind: CompetitionChallengeSet
 initialized: false
 competitionId: 00000000-0000-0000-0000-000000000001
@@ -17,11 +17,12 @@ challenges:
         cost: 10
         publishedAt: null
     rules:
-      schemaVersion: 2
-      scoreCurve:
-        initialPoints: 100
-        minimumPoints: 50
-        decayTeamCount: 10
-        decayMode: 2
-      bloodRewards: []
-      maxFlagAttempts: 20
+      mode: Ctf
+      ctf:
+        scoreCurve:
+          initialPoints: 100
+          minimumPoints: 50
+          decayTeamCount: 10
+          decayMode: Quadratic
+        bloodRewards: []
+        maxFlagAttempts: 20

@@ -172,7 +172,7 @@ internal static partial class RepositoryApp
         File.WriteAllText(
             path,
             $"""
-             apiVersion: gitops.noctf.dev/v1
+             apiVersion: gitops.noctf.dev/v2
              kind: CompetitionChallengeSet
              initialized: true
              competitionId: {competitionId}

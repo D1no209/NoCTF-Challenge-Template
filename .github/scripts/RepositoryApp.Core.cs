@@ -18,7 +18,7 @@ internal static partial class RepositoryApp
     };
     private static readonly string[] ForbiddenKeys =
     [
-        "provider", "runnerPool", "hostPort", "namespace", "ingress",
+        "provider", "runnerPool", "namespace", "ingress",
         "targetUrl", "targetPort"
     ];
     private static readonly List<string> ApplySummary = [];
@@ -92,25 +92,31 @@ internal static partial class RepositoryApp
                      ("Koh", "Container")
                  })
         {
-            var manifest = Mapping(LoadYamlText(ScaffoldManifest(
-                 Guid.NewGuid(),
-                 sample.Item1,
-                 "Self Test",
-                 "Web",
-                 sample.Item2)));
-            var runtime = manifest.Children.TryGetValue(
-                new YamlScalarNode("runtime"),
-                out var runtimeNode)
-                ? Mapping(runtimeNode)
-                : null;
+            var scaffold = ScaffoldManifest(
+                Guid.NewGuid(), sample.Item1, "Self Test", "Web", sample.Item2);
+            YamlMappingNode manifest;
+            try { manifest = Mapping(LoadYamlText(scaffold)); }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    $"Generated scaffold is invalid for {sample}:{Environment.NewLine}{scaffold}",
+                    exception);
+            }
+            var definition = Mapping(manifest.Children[new YamlScalarNode("definition")]);
+            var runtime = definition.Children.TryGetValue(
+                new YamlScalarNode("runtime"), out var runtimeNode)
+                ? Mapping(runtimeNode) : null;
             if ((sample.Item2 == "None") != (runtime is null))
                 throw new InvalidOperationException($"Scaffold runtime mismatch for {sample}.");
             if (sample.Item1 == "Awd"
                 && NullScalar(runtime!, "flagSource") != "AwdRotation")
                 throw new InvalidOperationException("AWD flagSource must follow the runtime.");
             if (sample.Item1 == "Koh"
-                && !runtime!.Children.ContainsKey(new YamlScalarNode("controlCheck")))
-                throw new InvalidOperationException("KoH controlCheck must follow the runtime.");
+                && (!(runtime!.Children[new YamlScalarNode("urlBindings")] is YamlSequenceNode bindings)
+                    || !bindings.Children.Cast<YamlMappingNode>().Any(binding =>
+                        bool.TryParse(Scalar(binding, "isControlCheck", "false"), out var control)
+                        && control)))
+                throw new InvalidOperationException("KoH control-check URL binding must follow the runtime.");
         }
         foreach (var issueForm in Directory.EnumerateFiles(
                      Path.Combine(root, ".github", "ISSUE_TEMPLATE"),
@@ -180,15 +186,20 @@ internal static partial class RepositoryApp
             if (!Regex.IsMatch(match.Groups[1].Value, "^[0-9a-f]{40}$"))
                 throw new InvalidOperationException(
                     $"{path} contains an Action that is not pinned to a commit SHA.");
-        if (Path.GetFileName(path).Equals("challenge-ci.yml", StringComparison.Ordinal))
+        var workflow = Path.GetFileName(path);
+        if (workflow.Equals("challenge-ci.yml", StringComparison.Ordinal))
+        {
+            if (text.Contains("NOCTF_BOT_TOKEN", StringComparison.Ordinal)
+                || !text.Contains("cancel-in-progress: true", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Challenge PR CI must cancel superseded validation and never receive the Bot token.");
+        }
+        if (workflow.Equals("challenge-deploy.yml", StringComparison.Ordinal))
         {
             var tokenIndex = text.IndexOf("NOCTF_BOT_TOKEN", StringComparison.Ordinal);
             var applyIndex = Regex.Match(text, @"(?m)^  apply:\s*$").Index;
             var tokenLines = Regex.Matches(text, @"(?m)^.*NOCTF_BOT_TOKEN.*$").Count;
-            if (tokenIndex >= 0
-                && (tokenLines != 1
-                    || applyIndex == 0
-                    || tokenIndex < applyIndex))
+            if (tokenLines != 1 || applyIndex == 0 || tokenIndex < applyIndex)
                 throw new InvalidOperationException(
                     "NOCTF_BOT_TOKEN must appear only in the apply job.");
             if (!text.Contains("id: apply_config", StringComparison.Ordinal)
@@ -197,6 +208,10 @@ internal static partial class RepositoryApp
                     StringComparison.Ordinal))
                 throw new InvalidOperationException(
                     "Challenge CI must skip registry login and Apply until NoCTF configuration is present.");
+            if (!text.Contains("queue: max", StringComparison.Ordinal)
+                || text.Contains("cancel-in-progress", StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "Challenge main deployment must queue every run without cancellation.");
         }
     }
 

@@ -2,8 +2,8 @@
 
 一场比赛对应一个由本模板创建的 GitHub 仓库。题目通过 Issue 创建分支和 Draft PR；合并到 `main` 后，仓库 Action 构建镜像并使用普通 NoCTF Bot JWT 调用管理 API。
 
-当前脚本只使用 NoCTF 已有的读取与 CRUD 接口，不新增 GitOps 接口。升级现有仓库前，
-请先阅读 [契约升级与安全重跑](docs/contract-upgrade.md)。不要在平台重新增加旧的 revision 或 baseScore 字段。
+当前脚本只使用 NoCTF 0.3.0 的强类型读取与 CRUD 接口，不新增 GitOps 接口。Manifest 只支持
+`gitops.noctf.dev/v2`，详见 [API 契约与安全重跑](docs/contract-upgrade.md)。
 
 ## 初始化
 
@@ -113,8 +113,8 @@ README 自动重建，生成按比赛顺序排列的题目表与方向统计。�
 
 - `challenge.yml` 管理 Challenge metadata、题面、附件、静态 Flag、Runtime、Checker和动态 Flag注入。
 - `competition.yml` 管理 CompetitionChallenge ID、可空 customTitle、顺序、发布状态、Hints 和模式专属 Rules；没有独立 BaseScore。
-- CTF Definition 使用 schemaVersion 3，CTF Rules 使用 schemaVersion 2；两者是独立契约。
-- Manifest 禁止 provider、runnerPool、hostPort、namespace、Ingress和 Checker target URL/port。
+- Definition 与 Rules 都使用 `mode` 加唯一模式分支，直接映射 NoCTF 强类型 API；不存在 `schemaVersion`、`definitionJson` 或 `rulesJson`。
+- Container 的 `hostPort` 必须为 `0`；Manifest 禁止 provider、runnerPool、namespace、Ingress和 Checker target URL/port。
 - Attachment 内容不可原位替换；内容变化时必须生成新的 Attachment ID。
 - 外部镜像必须使用 `registry/image@sha256:...`。
 - 仓库构建镜像通过 source hash tag解析 digest，digest 不写回 Git。
@@ -130,4 +130,6 @@ README 自动重建，生成按比赛顺序排列的题目表与方向统计。�
 - `.github/**`、`competition.yml`、Runtime和 Checker分别配置 CODEOWNERS；
 - 合并后自动删除题目分支。
 
-PR 不读取 NoCTF 或 Registry Secret。只有 main 的最终 Apply job可以读取 Bot JWT。
+PR 不读取 NoCTF 或 Registry Secret。只有串行排队的 main Deploy workflow 最终 Apply job可以读取 Bot JWT。
+`NoCTF Contract` workflow 使用审核过的固定 NoCTF 提交运行八组强类型 fixture 和真实 HTTP/PostgreSQL
+联调；升级平台契约时必须显式更新该 SHA。

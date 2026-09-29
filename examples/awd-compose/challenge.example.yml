@@ -1,4 +1,4 @@
-apiVersion: gitops.noctf.dev/v1
+apiVersion: gitops.noctf.dev/v2
 kind: ChallengeTemplate
 id: 30000000-0000-0000-0000-000000000101
 mode: Awd
@@ -16,42 +16,53 @@ build:
     - key: checker
       context: checker
       dockerfile: checker/Dockerfile
-runtime:
-  allocation: PerTeam
-  flagSource: AwdRotation
-  endpoints:
-    - protocol: Http
-      containerPort: 8080
+definition:
+  mode: Awd
+  awd:
+    flagInjection:
+      command: /app/set-flag '${FLAG}'
+      timeoutSeconds: 30
       serviceName: web
-      exposure: Participants
-  limits:
-    memoryBytes: 268435456
-    nanoCpus: 500000000
-    pidsLimit: 128
-  definition:
+  runtime:
     kind: Compose
-    file: runtime/compose.yml
-    serviceImages:
-      web:
-        build: web
-      redis:
-        external: redis@sha256:0000000000000000000000000000000000000000000000000000000000000000
-    serviceResources:
-      web:
-        memoryBytes: 134217728
-        nanoCpus: 250000000
-        pidsLimit: 64
-      redis:
-        memoryBytes: 134217728
-        nanoCpus: 250000000
-        pidsLimit: 64
-flagInjection:
-  command: /app/set-flag '${FLAG}'
-  timeoutSeconds: 30
-  serviceName: web
-checker:
-  targetServiceName: web
-  job:
+    allocation: PerTeam
+    flagSource: AwdRotation
+    egressPolicy: Isolated
+    urlBindings:
+      - urlTemplate: http://{HOST}:{PORT}/
+        exposure: Participants
+        containerPort: 8080
+        serviceName: web
+        isControlCheck: false
+    limits:
+      memoryBytes: 268435456
+      nanoCpus: 500000000
+      pidsLimit: 128
+    compose:
+      file: runtime/compose.yml
+      serviceImages:
+        web:
+          build: web
+        redis:
+          external: redis@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      environment: {}
+      labels: {}
+      flagEnvironmentVariables: {}
+      serviceResources:
+        - serviceName: web
+          limits:
+            memoryBytes: 134217728
+            nanoCpus: 250000000
+            pidsLimit: 64
+        - serviceName: redis
+          limits:
+            memoryBytes: 134217728
+            nanoCpus: 250000000
+            pidsLimit: 64
+  checker:
     image:
       build: checker
+    command: []
+    environment: {}
     timeoutSeconds: 30
+    targetServiceName: web

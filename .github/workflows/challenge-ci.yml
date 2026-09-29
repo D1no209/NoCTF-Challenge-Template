@@ -2,23 +2,13 @@ name: Challenge CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
-    paths-ignore:
-      - README.md
-  workflow_dispatch:
-    inputs:
-      rebuild_all:
-        description: Rebuild every declared image
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: challenge-main-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: challenge-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   validate:
@@ -52,16 +42,10 @@ jobs:
       - id: plan
         name: Discover changed images
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [[ "${{ inputs.rebuild_all }}" == "true" || "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
-            dotnet run --file .github/scripts/repository.cs -- plan --all --sha "$HEAD_SHA" --github-output
-          elif [[ -z "$BASE_SHA" ]]; then
-            dotnet run --file .github/scripts/repository.cs -- plan --base "$HEAD_SHA" --head "$HEAD_SHA" --sha "$HEAD_SHA" --github-output
-          else
-            dotnet run --file .github/scripts/repository.cs -- plan --base "$BASE_SHA" --head "$HEAD_SHA" --sha "$HEAD_SHA" --github-output
-          fi
+          dotnet run --file .github/scripts/repository.cs -- plan --base "$BASE_SHA" --head "$HEAD_SHA" --sha "$HEAD_SHA" --github-output
 
   build:
     needs: plan
@@ -80,20 +64,6 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
-      - name: Login to GHCR
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - name: Login to custom Registry
-        if: github.event_name != 'pull_request' && vars.CUSTOM_REGISTRY_HOST != ''
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          registry: ${{ vars.CUSTOM_REGISTRY_HOST }}
-          username: ${{ secrets.CUSTOM_REGISTRY_USERNAME }}
-          password: ${{ secrets.CUSTOM_REGISTRY_PASSWORD }}
       - name: Build image
         env:
           CUSTOM_REGISTRY_HOST: ${{ vars.CUSTOM_REGISTRY_HOST }}
@@ -104,76 +74,3 @@ jobs:
           --challenge '${{ matrix.image.challenge }}'
           --key '${{ matrix.image.key }}'
           --sha '${{ matrix.image.gitSha }}'
-          ${{ github.event_name != 'pull_request' && '--push' || '' }}
-
-  apply:
-    needs: [validate, plan, build]
-    if: >-
-      always()
-      && github.event_name != 'pull_request'
-      && needs.validate.result == 'success'
-      && needs.plan.result == 'success'
-      && (needs.build.result == 'success' || needs.build.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
-        with:
-          dotnet-version: 10.0.x
-      - id: apply_config
-        name: Check NoCTF configuration
-        env:
-          NOCTF_API_URL: ${{ vars.NOCTF_API_URL }}
-        run: |
-          if [[ -z "$NOCTF_API_URL" ]]; then
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            {
-              echo "## NoCTF GitOps Apply"
-              echo
-              echo "> [!WARNING]"
-              echo "> Apply skipped because repository variable \`NOCTF_API_URL\` is not configured."
-              echo
-              echo "Complete the repository setup documented in README.md, including the Bot token secret."
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
-        if: steps.apply_config.outputs.configured == 'true'
-      - name: Login to selected GHCR
-        if: >-
-          steps.apply_config.outputs.configured == 'true'
-          && (vars.NOCTF_IMAGE_REGISTRY == '' || vars.NOCTF_IMAGE_REGISTRY == 'ghcr')
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-      - name: Login to selected custom Registry
-        if: >-
-          steps.apply_config.outputs.configured == 'true'
-          && vars.NOCTF_IMAGE_REGISTRY == 'custom'
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          registry: ${{ vars.CUSTOM_REGISTRY_HOST }}
-          username: ${{ secrets.CUSTOM_REGISTRY_USERNAME }}
-          password: ${{ secrets.CUSTOM_REGISTRY_PASSWORD }}
-      - name: Apply repository state to NoCTF
-        if: steps.apply_config.outputs.configured == 'true'
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-          NOCTF_API_URL: ${{ vars.NOCTF_API_URL }}
-          NOCTF_IMAGE_REGISTRY: ${{ vars.NOCTF_IMAGE_REGISTRY }}
-          NOCTF_BOT_TOKEN: ${{ secrets.NOCTF_BOT_TOKEN }}
-          CUSTOM_REGISTRY_HOST: ${{ vars.CUSTOM_REGISTRY_HOST }}
-          CUSTOM_REGISTRY_NAMESPACE: ${{ vars.CUSTOM_REGISTRY_NAMESPACE }}
-        run: |
-          if [[ "$EVENT_NAME" == "push" ]]; then
-            dotnet run --file .github/scripts/repository.cs -- apply --base "$BASE_SHA" --head "$HEAD_SHA"
-          else
-            dotnet run --file .github/scripts/repository.cs -- apply
-          fi

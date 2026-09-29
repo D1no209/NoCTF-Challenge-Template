@@ -1,4 +1,4 @@
-apiVersion: gitops.noctf.dev/v1
+apiVersion: gitops.noctf.dev/v2
 kind: ChallengeTemplate
 id: 10000000-0000-0000-0000-000000000101
 mode: Ctf
@@ -14,21 +14,38 @@ build:
       context: runtime
       dockerfile: runtime/Dockerfile
       platforms: [linux/amd64]
-runtime:
-  allocation: PerTeam
-  flagSource: PerTeam
-  definition:
+definition:
+  mode: Ctf
+  ctf:
+    interactionKind: FlagSubmission
+  runtime:
     kind: Container
-    image:
-      build: runtime
-    environment: {}
-    flagEnvironmentVariableName: FLAG
-  limits:
-    memoryBytes: 268435456
-    nanoCpus: 500000000
-    pidsLimit: 128
-  endpoints:
-    - name: web
-      protocol: Http
-      containerPort: 8080
-      exposure: OwnerOnly
+    allocation: PerTeam
+    flagSource: PerTeam
+    egressPolicy: Isolated
+    limits:
+      memoryBytes: 268435456
+      nanoCpus: 500000000
+      pidsLimit: 128
+    urlBindings:
+      - urlTemplate: http://{HOST}:{PORT}/
+        exposure: OwnerOnly
+        containerPort: 8080
+        isControlCheck: false
+    container:
+      image:
+        build: runtime
+      command: []
+      environment: {}
+      labels: {}
+      portMappings:
+        - containerPort: 8080
+          hostPort: 0
+      security:
+        noNewPrivileges: false
+        readonlyRootfs: false
+        runAsNonRoot: false
+        capDrop: []
+        capAdd: []
+      flagEnvironmentVariableName: FLAG
+      internalPorts: []

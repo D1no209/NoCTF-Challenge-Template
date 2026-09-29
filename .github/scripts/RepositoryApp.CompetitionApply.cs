@@ -28,10 +28,10 @@ internal static partial class RepositoryApp
             desiredIds.Add(id);
             var template = documents[NormalizePath(Scalar(item, "challenge"))];
             var customTitle = NullScalar(item, "customTitle");
-            var current = existing.SingleOrDefault(value => value["id"]!.GetValue<Guid>() == id);
-            if (current is null)
+            var currentRow = existing.SingleOrDefault(value => value["id"]!.GetValue<Guid>() == id);
+            if (currentRow is null)
             {
-                current = CompetitionChallengeResource(await client.CreateAsync(
+                currentRow = CompetitionChallengeResource(await client.CreateAsync(
                     $"/api/v1/admin/competitions/{competitionId}/challenges",
                     new
                     {
@@ -48,21 +48,21 @@ internal static partial class RepositoryApp
                                && BoolEquals(challenge, "isPublished", false);
                     }));
             }
-            if (current!["challengeId"]!.GetValue<Guid>() != template.Id)
+            if (currentRow!["challengeId"]!.GetValue<Guid>() != template.Id)
                 throw new InvalidOperationException(
                     $"CompetitionChallenge {id} already belongs to another Challenge.");
 
             var rules = MaterializeRules(item, template.Mode);
-            var detail = await client.GetAsync(
+            var detail = await client.GetAsync<AdminCompetitionChallengeResponse>(
                 $"/api/v1/admin/competitions/{competitionId}/challenges/{id}");
-            current = CompetitionChallengeResource(detail!);
-            var currentRules = detail!["rulesJson"]?.ToString();
+            var current = detail!.Challenge;
+            var currentRules = detail.Rules;
             var hintsMatch = await HintsMatchAsync(client, competitionId, id, item);
             var order = int.Parse(Scalar(item, "order"));
             var published = bool.Parse(Scalar(item, "published", "false"));
-            var aggregateMatches = current["customTitle"]?.GetValue<string>() == customTitle
-                                   && current["order"]!.GetValue<int>() == order
-                                   && BoolEquals(current, "isPublished", published);
+            var aggregateMatches = current.CustomTitle == customTitle
+                                   && current.Order == order
+                                   && current.IsPublished == published;
             if (aggregateMatches
                 && JsonEquivalent(currentRules, rules)
                 && hintsMatch)
@@ -71,28 +71,28 @@ internal static partial class RepositoryApp
                 continue;
             }
 
-            var presentationChanged = current["customTitle"]?.GetValue<string>() != customTitle
-                                      || current["order"]!.GetValue<int>() != order;
+            var presentationChanged = current.CustomTitle != customTitle
+                                      || current.Order != order;
             var rulesChanged = !JsonEquivalent(currentRules, rules);
             if (presentationChanged || rulesChanged)
-                current = await PatchCompetitionChallengeAsync(
+                _ = await PatchCompetitionChallengeAsync(
                     client,
                     competitionId,
                     id,
                     presentationChanged,
                     customTitle,
                     order,
-                    current["isPublished"]!.GetValue<bool>(),
+                    current.IsPublished,
                     rulesChanged ? rules : null);
 
             await ApplyHintsAsync(client, competitionId, id, item);
-            var refreshedResponse = await client.GetAsync(
+            var refreshedResponse = await client.GetAsync<AdminCompetitionChallengeResponse>(
                 $"/api/v1/admin/competitions/{competitionId}/challenges/{id}")
                 ?? throw new InvalidOperationException($"CompetitionChallenge {id} disappeared.");
-            var refreshed = CompetitionChallengeResource(refreshedResponse);
-            if (!BoolEquals(refreshed, "isPublished", published)
-                || refreshed["customTitle"]?.GetValue<string>() != customTitle
-                || refreshed["order"]!.GetValue<int>() != order)
+            var refreshed = refreshedResponse.Challenge;
+            if (refreshed.IsPublished != published
+                || refreshed.CustomTitle != customTitle
+                || refreshed.Order != order)
                 await UpdateCompetitionChallengeAsync(
                     client, competitionId, id, customTitle, order, published);
             ApplySummary.Add($"CompetitionChallenge `{id}` converged.");
@@ -170,7 +170,7 @@ internal static partial class RepositoryApp
             customTitle,
             order,
             published,
-            rulesJson: null);
+            rulesConfiguration: null);
 
     private static async Task<JsonObject> PatchCompetitionChallengeAsync(
         NoCtfClient client,
@@ -180,7 +180,7 @@ internal static partial class RepositoryApp
         string? customTitle,
         int order,
         bool published,
-        string? rulesJson)
+        JsonObject? rulesConfiguration)
     {
         object? presentation = includePresentation
             ? new
@@ -190,7 +190,9 @@ internal static partial class RepositoryApp
                 isPublished = published
             }
             : null;
-        object? rules = rulesJson is null ? null : new { json = rulesJson };
+        object? rules = rulesConfiguration is null
+            ? null
+            : new CompetitionChallengeRulesPatchRequest(rulesConfiguration);
         var response = await client.SendAsync(
             HttpMethod.Patch,
             $"/api/v1/admin/competitions/{competitionId}/challenges/{id}",

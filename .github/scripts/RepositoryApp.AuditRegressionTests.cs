@@ -41,6 +41,7 @@ internal static partial class RepositoryApp
         })
         {
             File.WriteAllText(Path.Combine(root, "competition.yml"), $$"""
+                apiVersion: gitops.noctf.dev/v2
                 competitionId: {{Guid.NewGuid()}}
                 mode: Ctf
                 challenges:
@@ -48,7 +49,7 @@ internal static partial class RepositoryApp
                     challenge: web/hints
                     order: 1
                     published: true
-                    rules: { schemaVersion: 2 }
+                    rules: { mode: Ctf, ctf: {} }
                     hints:
                       - id: {{Guid.NewGuid()}}
                         content: {{content}}
@@ -91,8 +92,12 @@ internal static partial class RepositoryApp
             await CreateScaffoldRuntimeFilesAsync(directory, mode, kind);
             File.WriteAllText(Path.Combine(directory, "statement.md"), "test");
             var manifest = Mapping(LoadYamlText(ScaffoldManifest(Guid.NewGuid(), mode, "test", "Web", kind)));
-            var definition = Mapping(Mapping(manifest.Children[new YamlScalarNode("runtime")]).Children[new YamlScalarNode("definition")]);
-            var container = kind == "Compose" ? Mapping(definition.Children[new YamlScalarNode("serviceImages")]) : definition;
+            var definition = Mapping(manifest.Children[new YamlScalarNode("definition")]);
+            var runtime = Mapping(definition.Children[new YamlScalarNode("runtime")]);
+            var payload = Mapping(runtime.Children[new YamlScalarNode(kind.ToLowerInvariant())]);
+            var container = kind == "Compose"
+                ? Mapping(payload.Children[new YamlScalarNode("serviceImages")])
+                : payload;
             var key = new YamlScalarNode(kind == "Compose" ? "web" : "image");
             foreach (var invalid in new YamlNode[]
             {
@@ -115,13 +120,14 @@ internal static partial class RepositoryApp
                 catch (InvalidOperationException) { }
             }
             container.Children[key] = new YamlMappingNode { { "external", pinned } };
-            definition.Children[new YamlScalarNode("environment")] = new YamlMappingNode { { "external", "ordinary data" } };
+            payload.Children[new YamlScalarNode("environment")] = new YamlMappingNode { { "external", "ordinary data" } };
             var valid = new ChallengeDocument(Guid.NewGuid(), mode, "web/" + mode.ToLowerInvariant(), directory, manifest);
             var validErrors = new List<string>();
             ValidateChallenge(valid, mode, [], [], [], validErrors);
-            Check(validErrors.Count == 0, "Pinned images must be accepted.");
-            var materialized = JsonNode.Parse(MaterializeDefinition(valid, _ => pinned))!;
-            Check(materialized["runtime"]!["definition"]!["environment"]!["external"]!.GetValue<string>() == "ordinary data",
+            Check(validErrors.Count == 0,
+                "Pinned images must be accepted: " + string.Join(" | ", validErrors));
+            var materialized = MaterializeDefinition(valid, _ => pinned);
+            Check(materialized["runtime"]![kind.ToLowerInvariant()]!["environment"]!["external"]!.GetValue<string>() == "ordinary data",
                 "Image replacement must not rewrite environment dictionaries.");
         }
     }
@@ -175,7 +181,7 @@ internal static partial class RepositoryApp
                     challenge: web/one
                     order: 10
                     published: true
-                    rules: { schemaVersion: 2 }
+                    rules: { mode: Ctf, ctf: {} }
                     hints: [{ id: '00000000-0000-0000-0000-000000000144', content: Valid hint, cost: 0, publishedAt: null }]
                 """));
             using var client = new NoCtfClient("https://noctf.example", "test-token", new RegressionHandler(async request =>
@@ -189,7 +195,12 @@ internal static partial class RepositoryApp
                     return JsonResponse(RegressionDetail(RegressionRow(id, template, 10, published, false)).ToJsonString());
                 if (request.Method == HttpMethod.Patch)
                 {
-                    var presentation = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!["presentation"];
+                    var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!;
+                    var presentation = body["presentation"];
+                    if (body["rules"] is JsonNode rules)
+                        Check(rules["configuration"]?["mode"]?.ToString() == "Ctf"
+                            && rules["json"] is null,
+                            "Competition challenge PATCH must use rules.configuration.");
                     if (presentation is not null)
                         published = presentation["isPublished"]!.GetValue<bool>();
                     return JsonResponse(RegressionDetail(RegressionRow(id, template, 10, published, false)).ToJsonString());
@@ -219,7 +230,7 @@ internal static partial class RepositoryApp
             order: {{(index == 0 ? 10 : 20 + index * 10)}}
             published: false
             hints: []
-            rules: { schemaVersion: 2 }
+            rules: { mode: Ctf, ctf: {} }
             """))) } };
         var documents = ids.Select((id, index) => new ChallengeDocument(templates[index], "Ctf", "web/item-"+index, "", new YamlMappingNode()))
             .ToDictionary(document => document.RelativeDirectory);
@@ -279,7 +290,11 @@ internal static partial class RepositoryApp
         ["challenge"] = row.DeepClone(),
         ["mode"] = "Ctf",
         ["competitionStatus"] = "Draft",
-        ["rulesJson"] = "{\"schemaVersion\":2}"
+        ["rules"] = new JsonObject
+        {
+            ["mode"] = "Ctf",
+            ["ctf"] = new JsonObject()
+        }
     };
 
     private sealed class RegressionHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler

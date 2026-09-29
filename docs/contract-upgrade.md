@@ -1,40 +1,23 @@
-# 当前 NoCTF 契约与安全重跑
+# GitOps v2 与 NoCTF 0.3.0 契约
 
-脚本只使用平台原有的认证、资源读取和 CRUD 接口，不增加同步/校验接口。
-本地检查与服务端写入验证是两个阶段；不通过试写后回滚实现预检。
+本仓库只支持 `gitops.noctf.dev/v2`，不读取或迁移 v1 Manifest。脚本通过 NoCTF 现有认证、
+资源读取和 CRUD 接口工作，不增加同步接口、Revision 字段或服务端仓库解析。
 
-## Manifest 调整
+## 强类型 Manifest
 
-- 移除 `baseScore`，把分值放进模式规则。CTF 使用 `rules.scoreCurve`，AWDP 使用 `rules.break` 和
-  `rules.fix`，AWD 使用 `rules.attackPoints` 等，KoH 使用 `rules.controlPointsPerInterval`。
-- CTF Definition schemaVersion 为 3、Rules schemaVersion 为 2；AWD/AWDP Definition 与 Rules 均为 4；KoH 均为 1。
-- `customTitle: null` 表示使用题库标题。更新 API 始终显式发送该字段。
-- 不使用 revision / expectedRevision。可变资源遵循 last-write-wins。
-- 比赛详情从 `competition` 与 `capabilities` 聚合响应读取；比赛题目详情从 `challenge` 与
-  `rulesJson` 聚合响应读取。题库模板和比赛题目分别使用 `content`、`presentation/rules`
-  section 的 PATCH；不再调用旧 PUT 或独立 `/configuration`。
-- `flagTemplate` 配置在比赛题目 Rules，不再属于 Challenge Definition。
-- AWDP Runtime 必须为 PerTeam Flag、配置 FLAG 注入环境变量及仅所属队伍可见的访问入口。
-- 可选 `checkerFixInput: true` 位于 AWDP `challenge.yml` 根节点，要求配置 Checker。
-- 访问入口可用 `urlTemplate` 自定义显示文本；未设置时沿用 Http/Tcp 默认模板。
-- 带引号的 YAML 数字/布尔值保持字符串，适合环境变量；端口等未加引号数值按数值处理。
+- `challenge.yml.definition` 使用 `mode` 和唯一的 `ctf`、`awd`、`awdp` 或 `koh` 分支。
+- Runtime 使用 `kind` 和唯一的 `container`、`compose` 或 `ova` 数据分支；本模板脚手架只生成
+  Container 与 Compose。Container 端口映射的 `hostPort` 必须为 `0`。
+- CTF 必须显式设置 `definition.ctf.interactionKind`。
+- AWD Flag 注入位于 `definition.awd.flagInjection`；Checker 是 `definition.checker` 的直接 Runner Job。
+- AWDP Patch、`checkerFixInput` 与 `maximumPatchUploadBytes` 都属于 Definition。
+- `competition.yml.rules` 同样使用 `mode` 和唯一模式分支；AWDP 曲线名为
+  `breakScoreCurve` 与 `fixScoreCurve`。
+- Flag Template 位于对应的比赛题 Rules 模式分支，不放入 Challenge Definition。
+- Manifest 不包含 `schemaVersion`、`definitionJson`、`rulesJson`、`baseScore`、provider 或 runnerPool。
 
-例如 CTF 计分：
-
-```yaml
-customTitle: null
-order: 10
-published: false
-rules:
-  schemaVersion: 2
-  scoreCurve:
-    initialPoints: 500
-    minimumPoints: 100
-    decayTeamCount: 10
-    decayMode: 2
-```
-
-Issue 中的 Base Score 仅用于生成初始模式规则，不会成为平台字段。
+构建镜像仍使用 Manifest 专用的 `{ build: key }` 或 `{ external: digest }` 引用。Apply 前会把这些
+引用解析为不可变 digest，并把 Compose 文件物化成 API 的 `composeYaml`。
 
 ## 预检与应用
 
@@ -44,40 +27,20 @@ dotnet run --file .github/scripts/repository.cs -- apply --dry-run
 dotnet run --file .github/scripts/repository.cs -- apply
 ```
 
-dry-run 会解析镜像 digest、检查比赛/题库权限、验证不可变附件身份及本地 Manifest，
-对 NoCTF 只发送 GET；它不会执行完整服务端模式校验，实际 CRUD 仍可能返回业务校验错误。
-它不会创建、删除、恢复、发布或修改题目资源，不是跨资源事务，也不锁定后续写入。
-镜像须先完成构建/推送；纯静态题无需 Docker 镜像。
+dry-run 只执行本地 Manifest、镜像 digest、权限和不可变附件身份检查；它不会试写后回滚，也不能
+替代写入时的模式、生命周期和活动 Runtime 验证。
 
-GitOps 对整场比赛的题目集合及受管模板的附件、静态 Flag、Hint 集合进行收敛。
-不要把尚未纳入 Manifest 的资源留在这些集合中，否则下一次 Apply 会软删除它们。
-题库模板删除仍必须提供配对的 `--base`、`--head`，只处理明确的 Git 删除记录。
+`competition.yml.challenges`、受管模板附件、静态 Flag 和 Hint 都是完整集合。仓库之外对这些集合
+的 UI 修改会在下一次 Apply 被仓库期望状态覆盖。每个比赛仓库通过 Issue scaffold 生成独立的
+Challenge UUID；不支持多个仓库共同管理同一个全局 Challenge UUID。
 
-初始化必须确认 Bot 有比赛 Owner/Manager 权限，而不是仅能读取比赛。
-比赛 Manager 权限不包含题库编辑权限；接管模板时须由原 Owner 单独授权。
+## 失败恢复与并发
 
-## 失败恢复
+- main Deploy workflow 使用完整 FIFO 等待队列，同一仓库的 validate、build 与 apply 不会并发。
+- POST、PUT、PATCH 和 DELETE 不进行盲目传输重试。创建响应丢失时按稳定 UUID 重读并核对父资源。
+- 中途失败保留此前已提交的资源；修复权限、生命周期或 Runtime 冲突后重跑同一 Apply 继续收敛。
+- 顺序交换先移动到空闲序号；软删除恢复先避让墓碑原序号，再写最终序号。
+- 活动 Runtime、比赛生命周期和唯一约束冲突保持 409，不绕过平台规则。
+- 不记录 Bot JWT、Flag 或 API 响应正文；错误只包含方法、路径、状态码和稳定业务码。
 
-- GitOps 使用的集合接口返回完整 `items`，每次只读取一次；不会把 offset 分页或签名 cursor 协议套用到这些接口。
-- 不盲目重试 POST/PUT/DELETE。创建响应丢失时按稳定 UUID 重读，只有父资源和内容吻合才算成功。
-- 中途失败后重新运行同一 Apply，按当前状态继续；新 UUID 不由重试生成。
-- 资源 ID、附件内容、权限与生命周期冲突不会被当作可重试网络错误。
-- 附件内容、文件名或 ContentType 改变时分配新附件 UUID。上传只允许 attachments/ 中的普通文件。
-- 附件上传使用批量 multipart 契约 `DeliveryPolicy=All`、`AttachmentIds` 与 `Files`；GitOps 不接管 RandomOnePerTeam 附件集合。
-- 交换题目顺序会先挪到空闲序号，再写入目标顺序，避免唯一约束冲突。
-- 恢复题目会先避让原序号，再依次恢复并腾空旧槽位，最后统一写入目标序号，支持中断重跑。
-- 更新已发布题目不再临时取消发布，Shared 模板也不临时降级为 Private；依赖失败保持原发布状态。
-- Container、Checker 和 Compose serviceImages 都必须使用唯一的 build/external 引用，外部镜像必须
-  是 sha256 digest，普通字符串不能绕过此规则。
-- 不记录 Bot JWT、完整 Flag 或任意 API 响应正文。错误输出保留请求方法、路径、状态码及稳定业务码。
-
-只改题面、附件或计分规则时，不重建无关镜像。Runtime/Checker 构建上下文、Dockerfile 或对应
-构建定义变化时才构建对应镜像；改动构建脚本时全量重建以避免缓存规则变化。
-
-`contract-fixtures` 仅用于平台契约测试，输出的 example.invalid 镜像不可部署，不能用于 Apply。
-
-## source hash 升级
-
-新 hash 使用 `noctf-source-v2` 域、长度前缀、文件内容摘要及 Git 模式，修复不同文件树产生同一
-输入字节串的问题。升级脚本后首次运行应全量构建（手动 workflow 勾选 rebuild_all）；旧 src tag
-不删除，现有题目已引用的 digest 保持有效。该身份描述源码输入，不宣称 Docker 构建本身完全可重复。
+PR workflow 不读取 Bot Token 或 Registry Secret；只有 main Deploy 的 Apply job可以读取 Bot JWT。

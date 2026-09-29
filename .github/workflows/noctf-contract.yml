@@ -1,0 +1,50 @@
+name: NoCTF Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: noctf-contract-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  typed-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out GitOps repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: template
+      - name: Check out pinned NoCTF contract
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: D1no209/NoCTF
+          ref: 7aaceef635a19619e020977ecc5d200768ba2a9c
+          path: noctf
+      - uses: actions/setup-dotnet@d4c94342e560b34958eacfc5d055d21461ed1c5d
+        with:
+          dotnet-version: 10.0.x
+      - name: Validate every typed fixture
+        working-directory: noctf/backend
+        env:
+          NOCTF_GITOPS_TEMPLATE_ROOT: ${{ github.workspace }}/template
+        run: >-
+          dotnet test tests/NoCTF.Tests/NoCTF.Tests.csproj
+          --treenode-filter '/*/*/GitOpsTemplateFixtureTests/*'
+          --minimum-expected-tests 1
+      - name: Run real GitOps HTTP contract
+        working-directory: noctf/backend
+        env:
+          NOCTF_GITOPS_TEMPLATE_ROOT: ${{ github.workspace }}/template
+          NOCTF_REQUIRE_DOCKER_INTEGRATION: 'true'
+        run: >-
+          dotnet test tests/NoCTF.Tests/NoCTF.Tests.csproj
+          --no-build
+          --treenode-filter '/*/*/GitOpsRepositoryHttpTests/*'
+          --minimum-expected-tests 1

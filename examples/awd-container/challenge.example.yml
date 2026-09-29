@@ -1,4 +1,4 @@
-apiVersion: gitops.noctf.dev/v1
+apiVersion: gitops.noctf.dev/v2
 kind: ChallengeTemplate
 id: 20000000-0000-0000-0000-000000000101
 mode: Awd
@@ -18,28 +18,48 @@ build:
       context: checker
       dockerfile: checker/Dockerfile
       platforms: [linux/amd64]
-runtime:
-  allocation: PerTeam
-  flagSource: AwdRotation
-  endpoints:
-    - protocol: Http
-      containerPort: 8080
-      exposure: Participants
-  definition:
+definition:
+  mode: Awd
+  awd:
+    flagInjection:
+      command: /app/set-flag '${FLAG}'
+      timeoutSeconds: 30
+      serviceName: null
+  runtime:
     kind: Container
-    image:
-      build: runtime
-  limits:
-    memoryBytes: 536870912
-    nanoCpus: 1000000000
-    pidsLimit: 256
-flagInjection:
-  command: /app/set-flag '${FLAG}'
-  timeoutSeconds: 30
-checker:
-  job:
+    allocation: PerTeam
+    flagSource: AwdRotation
+    egressPolicy: Isolated
+    urlBindings:
+      - urlTemplate: http://{HOST}:{PORT}/
+        exposure: Participants
+        containerPort: 8080
+        isControlCheck: false
+    limits:
+      memoryBytes: 536870912
+      nanoCpus: 1000000000
+      pidsLimit: 256
+    container:
+      image:
+        build: runtime
+      command: []
+      environment: {}
+      labels: {}
+      portMappings:
+        - containerPort: 8080
+          hostPort: 0
+      security:
+        noNewPrivileges: false
+        readonlyRootfs: false
+        runAsNonRoot: false
+        capDrop: []
+        capAdd: []
+      flagEnvironmentVariableName: null
+      internalPorts: []
+  checker:
     image:
       build: checker
     command: []
     environment: {}
     timeoutSeconds: 30
+    targetServiceName: null

@@ -99,12 +99,12 @@ internal static partial class RepositoryApp
 
     private static string RulesScoreLabel(YamlMappingNode item, string mode)
     {
-        var rules = JsonNode.Parse(MaterializeRules(item, mode))!;
+        var rules = MaterializeRules(item, mode)[NormalizeMode(mode).ToLowerInvariant()]!;
         return NormalizeMode(mode) switch
         {
             "Ctf" => rules["scoreCurve"]?["initialPoints"]?.ToString() ?? "Inherited",
             "Awd" => rules["attackPoints"]?.ToString() ?? "Inherited",
-            "Awdp" => $"Break: {rules["break"]?["initialPoints"]?.ToString() ?? "inherited"}; Fix: {rules["fix"]?["initialPoints"]?.ToString() ?? "inherited"}",
+            "Awdp" => $"Break: {rules["breakScoreCurve"]?["initialPoints"]?.ToString() ?? "inherited"}; Fix: {rules["fixScoreCurve"]?["initialPoints"]?.ToString() ?? "inherited"}",
             "Koh" => rules["controlPointsPerInterval"]?.ToString() ?? "Inherited",
             _ => "Inherited"
         };

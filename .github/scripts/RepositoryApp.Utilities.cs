@@ -89,12 +89,8 @@ internal static partial class RepositoryApp
             ? actual == expected
             : bool.TryParse(jsonValue.ToString(), out actual) && actual == expected);
 
-    private static bool JsonEquivalent(string? left, string right)
-    {
-        if (left is null)
-            return false;
-        return JsonNode.DeepEquals(JsonNode.Parse(left), JsonNode.Parse(right));
-    }
+    private static bool JsonEquivalent(JsonNode? left, JsonNode right) =>
+        left is not null && JsonNode.DeepEquals(left, right);
 
     private static bool NullableInstantEquals(JsonNode? current, string? expected)
     {

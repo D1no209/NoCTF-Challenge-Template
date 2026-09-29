@@ -2,6 +2,9 @@
 
 This repository is managed through NoCTF GitOps.
 
+Only `gitops.noctf.dev/v2` manifests are accepted. Definition and Rules map to
+the NoCTF 0.3.0 typed contracts; legacy schema-version JSON is unsupported.
+
 ## Initialize
 
 1. Create a Bot in NoCTF, grant it `Organizer`, and add it to the competition as
@@ -43,6 +46,9 @@ dotnet run --file .github/scripts/repository.cs -- plan --base origin/main --hea
 `README.md` is generated after initialization. Edit competition metadata in
 `competition.yml` and challenge metadata in the corresponding
 `challenge.yml`; do not hand-edit the generated challenge table.
+
+Main deployments use a non-canceling queue so every adjacent push diff is built
+and applied. Do not force-push `main`.
 
 ## Branch protection
 

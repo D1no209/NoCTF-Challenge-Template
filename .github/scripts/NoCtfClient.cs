@@ -35,6 +35,17 @@ internal sealed class NoCtfClient : IDisposable
             ?? throw new InvalidOperationException($"{path} returned an empty response.");
     }
 
+    public async Task<T?> GetAsync<T>(string path, bool allowNotFound = false)
+        where T : class
+    {
+        using var response = await SendWithRetryAsync(() => new HttpRequestMessage(HttpMethod.Get, path));
+        if (allowNotFound && response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+        await EnsureSuccessAsync(response);
+        return await response.Content.ReadFromJsonAsync<T>()
+            ?? throw new InvalidOperationException($"{path} returned an empty response.");
+    }
+
     public async Task<List<JsonObject>> GetItemsAsync(string path)
     {
         var result = await GetAsync(path);
@@ -61,6 +72,25 @@ internal sealed class NoCtfClient : IDisposable
         }
     }
 
+    public async Task<T> CreateAsync<T>(string path, object body, string resourcePath,
+        Func<T, bool> matches)
+        where T : class
+    {
+        try { return await SendAsync<T>(HttpMethod.Post, path, body); }
+        catch (NoCtfApiException error) when (error.StatusCode == HttpStatusCode.Conflict || (int)error.StatusCode >= 500)
+        {
+            var current = await GetAsync<T>(resourcePath, allowNotFound: true);
+            if (current is not null && matches(current)) return current;
+            throw;
+        }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
+        {
+            var current = await GetAsync<T>(resourcePath, allowNotFound: true);
+            if (current is not null && matches(current)) return current;
+            throw;
+        }
+    }
+
     public async Task<JsonObject> SendAsync(HttpMethod method, string path, object? body = null)
     {
         using var response = await SendWithRetryAsync(() =>
@@ -76,6 +106,23 @@ internal sealed class NoCtfClient : IDisposable
         if (response.StatusCode == HttpStatusCode.NoContent)
             return [];
         return await response.Content.ReadFromJsonAsync<JsonObject>() ?? [];
+    }
+
+    public async Task<T> SendAsync<T>(HttpMethod method, string path, object? body = null)
+        where T : class
+    {
+        using var response = await SendWithRetryAsync(() =>
+        {
+            var request = new HttpRequestMessage(method, path);
+            if (body is not null)
+                request.Content = JsonContent.Create(body);
+            else if (method == HttpMethod.Post || method == HttpMethod.Put)
+                request.Content = JsonContent.Create(new { });
+            return request;
+        });
+        await EnsureSuccessAsync(response);
+        return await response.Content.ReadFromJsonAsync<T>()
+            ?? throw new InvalidOperationException($"{path} returned an empty response.");
     }
 
     public async Task UploadAsync(string path, Guid id, string file, string contentType)

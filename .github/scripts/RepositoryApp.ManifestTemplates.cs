@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using YamlDotNet.RepresentationModel;
+
 internal static partial class RepositoryApp
 {
     private static string ScaffoldManifest(
@@ -18,67 +19,25 @@ internal static partial class RepositoryApp
         string direction,
         string runtime)
     {
-        var runtimeBlock = (mode, runtime) switch
+        var body = (mode, runtime) switch
         {
-            ("Ctf", "None") => "",
-            ("Ctf", "Container") => ContainerBlock(
-                "runtime",
-                "PerTeam",
-                "  flagSource: PerTeam\n",
-                ctfFlag: true),
-            ("Ctf", "Compose") => ComposeBlock(includeChecker: false),
-            ("Awd", "Container") => ContainerBlock(
-                "runtime",
-                "PerTeam",
-                "  flagSource: AwdRotation\nflagInjection:\n  command: /app/set-flag '${FLAG}'\n  timeoutSeconds: 30\nchecker:\n  job:\n    image:\n      build: checker\n    timeoutSeconds: 30\n",
-                includeChecker: true),
-            ("Awd", "Compose") => ComposeBlock(includeChecker: true),
-            ("Awdp", "Container") => """
-
-                build:
-                  images:
-                    - key: target
-                      context: runtime
-                      dockerfile: runtime/Dockerfile
-                    - key: checker
-                      context: checker
-                      dockerfile: checker/Dockerfile
-                runtime:
-                  allocation: PerTeam
-                  flagSource: PerTeam
-                  definition:
-                    kind: Container
-                    image:
-                      build: target
-                    internalPorts: [8080]
-                    flagEnvironmentVariableName: FLAG
-                  endpoints:
-                    - protocol: Http
-                      containerPort: 8080
-                      exposure: OwnerOnly
-                  limits:
-                    memoryBytes: 268435456
-                    nanoCpus: 500000000
-                    pidsLimit: 128
-                patch:
-                  entrypoint: fix.sh
-                  command: []
-                  timeoutSeconds: 60
-                  readyTimeoutSeconds: 30
-                checker:
-                  image:
-                    build: checker
-                  timeoutSeconds: 30
+            ("Ctf", "None") => """
+                definition:
+                  mode: Ctf
+                  ctf:
+                    interactionKind: FlagSubmission
                 """,
-            ("Koh", "Container") => ContainerBlock(
-                "hill",
-                "Shared",
-                "  controlCheck:\n    protocol: Http\n    containerPort: 8080\n    path: /flag\n"),
+            ("Ctf", "Container") => ContainerManifest("Ctf", "runtime", "PerTeam", "PerTeam", "OwnerOnly"),
+            ("Ctf", "Compose") => ComposeManifest("Ctf", includeChecker: false),
+            ("Awd", "Container") => ContainerManifest("Awd", "runtime", "PerTeam", "AwdRotation", "Participants", includeChecker: true),
+            ("Awd", "Compose") => ComposeManifest("Awd", includeChecker: true),
+            ("Awdp", "Container") => ContainerManifest("Awdp", "target", "PerTeam", "PerTeam", "OwnerOnly", includeChecker: true),
+            ("Koh", "Container") => ContainerManifest("Koh", "hill", "Shared", null, "Participants", controlCheck: true),
             _ => throw new InvalidOperationException(
                 $"Runtime type '{runtime}' is not supported for {mode}.")
         };
         return $"""
-                apiVersion: gitops.noctf.dev/v1
+                apiVersion: gitops.noctf.dev/v2
                 kind: ChallengeTemplate
                 id: {id}
                 mode: {mode}
@@ -88,99 +47,143 @@ internal static partial class RepositoryApp
                 statement: statement.md
                 attachments: []
                 flags: []
-                {runtimeBlock}
+                {body}
                 """;
     }
 
-    private static string ContainerBlock(
+    private static string ContainerManifest(
+        string mode,
         string imageKey,
         string allocation,
-        string extra,
+        string? flagSource,
+        string exposure,
         bool includeChecker = false,
-        bool ctfFlag = false) =>
-        $"""
+        bool controlCheck = false)
+    {
+        var modeBranch = mode switch
+        {
+            "Ctf" => "  ctf:\n    interactionKind: FlagSubmission",
+            "Awd" => "  awd:\n    flagInjection:\n      command: /app/set-flag '${FLAG}'\n      timeoutSeconds: 30\n      serviceName: null",
+            "Awdp" => "  awdp: {}",
+            "Koh" => "  koh: {}",
+            _ => throw new InvalidOperationException($"Unsupported mode '{mode}'.")
+        };
+        var checker = includeChecker
+            ? "\n  checker:"
+              + "\n    image:"
+              + "\n      build: checker"
+              + "\n    command: []"
+              + "\n    environment: {}"
+              + "\n    timeoutSeconds: 30"
+              + "\n    targetServiceName: null"
+            : "";
+        var patch = mode == "Awdp"
+            ? "\n  patchEntrypoint: fix.sh"
+              + "\n  patchCommand: []"
+              + "\n  patchTimeoutSeconds: 60"
+              + "\n  readyTimeoutSeconds: 30"
+              + "\n  maximumPatchUploadBytes: 67108864"
+              + "\n  checkerFixInput: false"
+            : "";
+        var controlBinding = controlCheck
+            ? "\n      - urlTemplate: http://{HOST}:{PORT}/flag"
+              + "\n        exposure: OwnerOnly"
+              + "\n        containerPort: 8080"
+              + "\n        isControlCheck: true"
+            : "";
+        return $$"""
+                build:
+                  images:
+                    - key: {{imageKey}}
+                      context: runtime
+                      dockerfile: runtime/Dockerfile
+                      platforms: [linux/amd64]
+                {{(includeChecker ? "    - key: checker\n      context: checker\n      dockerfile: checker/Dockerfile\n      platforms: [linux/amd64]" : "")}}
+                definition:
+                  mode: {{mode}}
+                {{modeBranch}}
+                  runtime:
+                    kind: Container
+                    allocation: {{allocation}}
+                {{(flagSource is null ? "" : $"    flagSource: {flagSource}\n")}}
+                    egressPolicy: Isolated
+                    limits:
+                      memoryBytes: 268435456
+                      nanoCpus: 500000000
+                      pidsLimit: 128
+                    urlBindings:
+                      - urlTemplate: http://{HOST}:{PORT}/
+                        exposure: {{exposure}}
+                        containerPort: 8080
+                        isControlCheck: false{{controlBinding}}
+                    container:
+                      image:
+                        build: {{imageKey}}
+                      command: []
+                      environment: {}
+                      labels: {}
+                      portMappings:
+                        - containerPort: 8080
+                          hostPort: 0
+                      security:
+                        noNewPrivileges: false
+                        readonlyRootfs: false
+                        runAsNonRoot: false
+                        capDrop: []
+                        capAdd: []
+                      flagEnvironmentVariableName: {{(mode is "Ctf" or "Awdp" ? "FLAG" : "null")}}
+                      internalPorts: {{(mode == "Awdp" ? "[8080]" : "[]")}}{{patch}}{{checker}}
+                """;
+    }
 
-        build:
-          images:
-            - key: {imageKey}
-              context: runtime
-              dockerfile: runtime/Dockerfile
-              platforms: [linux/amd64]
-        {(includeChecker ? """
-            - key: checker
-              context: checker
-              dockerfile: checker/Dockerfile
-              platforms: [linux/amd64]
-        """ : "")}
-        runtime:
-          allocation: {allocation}
-          definition:
-            kind: Container
-            image:
-              build: {imageKey}
-        {(ctfFlag ? "    flagEnvironmentVariableName: FLAG" : "")}
-          limits:
-            memoryBytes: 268435456
-            nanoCpus: 500000000
-            pidsLimit: 128
-          endpoints:
-            - name: web
-              protocol: Http
-              containerPort: 8080
-              exposure: {(ctfFlag ? "OwnerOnly" : "Participants")}
-        {extra}
-        """;
-
-    private static string ComposeBlock(bool includeChecker) =>
-        $"""
-
-        build:
-          images:
-            - key: web
-              context: runtime/web
-              dockerfile: runtime/web/Dockerfile
-              platforms: [linux/amd64]
-        {(includeChecker ? """
-            - key: checker
-              context: checker
-              dockerfile: checker/Dockerfile
-              platforms: [linux/amd64]
-        """ : "")}
-        runtime:
-          allocation: PerTeam
-          {(includeChecker ? "flagSource: AwdRotation" : "flagSource: PerTeam")}
-          definition:
-            kind: Compose
-            file: runtime/compose.yml
-            serviceImages:
-              web:
-                build: web
-        {(!includeChecker ? """
-            flagEnvironmentVariables:
-              web: FLAG
-        """ : "")}
-          limits:
-            memoryBytes: 268435456
-            nanoCpus: 500000000
-            pidsLimit: 128
-          endpoints:
-            - protocol: Http
-              containerPort: 8080
-              serviceName: web
-              exposure: {(includeChecker ? "Participants" : "OwnerOnly")}
-        {(includeChecker ? """
-        flagInjection:
-          command: /app/set-flag '${FLAG}'
-          timeoutSeconds: 30
-          serviceName: web
-        checker:
-          targetServiceName: web
-          job:
-            image:
-              build: checker
-            timeoutSeconds: 30
-        """ : "")}
-        """;
+    private static string ComposeManifest(string mode, bool includeChecker)
+    {
+        var branch = includeChecker
+            ? "  awd:\n    flagInjection:\n      command: /app/set-flag '${FLAG}'\n      timeoutSeconds: 30\n      serviceName: web"
+            : "  ctf:\n    interactionKind: FlagSubmission";
+        return $$"""
+                build:
+                  images:
+                    - key: web
+                      context: runtime/web
+                      dockerfile: runtime/web/Dockerfile
+                      platforms: [linux/amd64]
+                {{(includeChecker ? "    - key: checker\n      context: checker\n      dockerfile: checker/Dockerfile\n      platforms: [linux/amd64]" : "")}}
+                definition:
+                  mode: {{mode}}
+                {{branch}}
+                  runtime:
+                    kind: Compose
+                    allocation: PerTeam
+                    flagSource: {{(includeChecker ? "AwdRotation" : "PerTeam")}}
+                    egressPolicy: Isolated
+                    limits:
+                      memoryBytes: 268435456
+                      nanoCpus: 500000000
+                      pidsLimit: 128
+                    urlBindings:
+                      - urlTemplate: http://{HOST}:{PORT}/
+                        exposure: {{(includeChecker ? "Participants" : "OwnerOnly")}}
+                        containerPort: 8080
+                        serviceName: web
+                        isControlCheck: false
+                    compose:
+                      file: runtime/compose.yml
+                      serviceImages:
+                        web:
+                          build: web
+                      environment: {}
+                      labels: {}
+                      flagEnvironmentVariables: {{(includeChecker ? "{}" : "{ web: FLAG }")}}
+                      serviceResources:
+                        - serviceName: web
+                          limits:
+                            memoryBytes: 268435456
+                            nanoCpus: 500000000
+                            pidsLimit: 128
+                {{(includeChecker ? "  checker:\n    image:\n      build: checker\n    command: []\n    environment: {}\n    timeoutSeconds: 30\n    targetServiceName: web" : "")}}
+                """;
+    }
 
     private static async Task CreateScaffoldRuntimeFilesAsync(
         string directory,
@@ -244,17 +247,40 @@ internal static partial class RepositoryApp
 
     private static JsonObject DefaultRules(string mode, long score)
     {
-        var result = new JsonObject { ["schemaVersion"] = RulesSchemaVersion(mode) };
-        JsonObject Curve() => new() { ["initialPoints"] = score, ["minimumPoints"] = score,
-            ["decayTeamCount"] = 10, ["decayMode"] = 0 };
-        switch (NormalizeMode(mode))
+        JsonObject Curve() => new()
         {
-            case "Ctf": result["scoreCurve"] = Curve(); break;
-            case "Awd": result["attackPoints"] = score; break;
-            case "Awdp": result["break"] = Curve(); result["fix"] = Curve(); break;
-            case "Koh": result["controlPointsPerInterval"] = score; break;
-        }
-        return result;
+            ["initialPoints"] = score,
+            ["minimumPoints"] = score,
+            ["decayTeamCount"] = 10,
+            ["decayMode"] = "Linear"
+        };
+        return NormalizeMode(mode) switch
+        {
+            "Ctf" => new JsonObject
+            {
+                ["mode"] = "Ctf",
+                ["ctf"] = new JsonObject { ["scoreCurve"] = Curve() }
+            },
+            "Awd" => new JsonObject
+            {
+                ["mode"] = "Awd",
+                ["awd"] = new JsonObject { ["attackPoints"] = score }
+            },
+            "Awdp" => new JsonObject
+            {
+                ["mode"] = "Awdp",
+                ["awdp"] = new JsonObject
+                {
+                    ["breakScoreCurve"] = Curve(),
+                    ["fixScoreCurve"] = Curve()
+                }
+            },
+            "Koh" => new JsonObject
+            {
+                ["mode"] = "Koh",
+                ["koh"] = new JsonObject { ["controlPointsPerInterval"] = score }
+            },
+            _ => throw new InvalidOperationException($"Unsupported mode '{mode}'.")
+        };
     }
-
 }

@@ -27,7 +27,7 @@ internal static partial class RepositoryApp
                 {
                     ["scenario"] = mode+"/"+runtime,
                     ["mode"] = mode,
-                    ["definition"] = JsonNode.Parse(definition),
+                    ["definition"] = definition,
                     ["rules"] = DefaultRules(mode, 100)
                 });
             }
@@ -127,14 +127,14 @@ internal static partial class RepositoryApp
         var yaml = YamlToJson(LoadYamlText("port: 8080\nquoted: '123'\nboolean: \"true\"\n"))!;
         Check(yaml["port"]!.GetValue<int>() == 8080 && yaml["quoted"]!.GetValue<string>() == "123"
             && yaml["boolean"]!.GetValue<string>() == "true", "YAML scalar types must survive materialization.");
+        ManifestV2Regression();
         foreach (var mode in new[] { "Ctf", "Awd", "Awdp", "Koh" })
         {
             var rules = DefaultRules(mode, 100);
-            Check(rules["schemaVersion"]!.GetValue<int>() == RulesSchemaVersion(mode), "Wrong rules schema.");
+            Check(rules["mode"]!.GetValue<string>() == mode
+                && rules[mode.ToLowerInvariant()] is JsonObject, "Wrong typed rules branch.");
             Check(!rules.ContainsKey("baseScore"), "Removed BaseScore must not reappear.");
         }
-        Check(DefinitionSchemaVersion("Ctf") == 3 && RulesSchemaVersion("Ctf") == 2,
-            "CTF Definition and Rules schema versions must remain independent.");
         try
         {
             RequireCompetitionManagement(new JsonObject
@@ -167,9 +167,13 @@ internal static partial class RepositoryApp
                     "Challenge templates must use PATCH instead of the removed PUT contract.");
                 var body = JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!;
                 Check(body["content"]?["title"]?.ToString() == "Current contract"
+                      && body["content"]?["definition"]?["mode"]?.ToString() == "Ctf"
+                      && body["content"]?["definitionJson"] is null
                       && body["mode"] is null,
-                    "Challenge template updates must use the content section.");
-                return JsonResponse("""{"title":"Current contract"}""");
+                    "Challenge template updates must use typed definition in the content section.");
+                return JsonResponse("""
+                    {"id":"00000000-0000-0000-0000-000000000001","ownerId":"00000000-0000-0000-0000-000000000002","managerIds":[],"mode":"Ctf","visibility":"Private","title":"Current contract","description":"Statement","direction":"Web","definition":{"mode":"Ctf","ctf":{"interactionKind":"FlagSubmission"}},"deletedAt":null,"activeCompetitionReferenceCount":0}
+                    """);
             })))
         {
             var challenge = new ChallengeDocument(
@@ -185,8 +189,23 @@ internal static partial class RepositoryApp
             await UpdateChallengeMetadataAsync(
                 client,
                 challenge,
-                new JsonObject(),
-                "{\"schemaVersion\":3}",
+                new ChallengeTemplateResponse(
+                    challenge.Id,
+                    Guid.NewGuid(),
+                    [],
+                    "Ctf",
+                    "Private",
+                    "Old title",
+                    "Statement",
+                    "Web",
+                    new JsonObject(),
+                    null,
+                    0),
+                new JsonObject
+                {
+                    ["mode"] = "Ctf",
+                    ["ctf"] = new JsonObject { ["interactionKind"] = "FlagSubmission" }
+                },
                 "Statement",
                 "Private");
         }
@@ -239,6 +258,51 @@ internal static partial class RepositoryApp
             Directory.Delete(temporary, recursive: true);
         }
         Console.WriteLine("GitOps contract tests passed (collections, retries, redaction, permissions, schemas, empty scaffold, incremental builds).");
+    }
+
+    private static void ManifestV2Regression()
+    {
+        var root = Mapping(LoadYamlText(ScaffoldManifest(
+            Guid.NewGuid(), "Ctf", "Contract", "Web", "None")));
+        var document = new ChallengeDocument(
+            Guid.NewGuid(), "Ctf", "web/contract", Path.GetTempPath(), root);
+        var errors = new List<string>();
+        root.Children[new YamlScalarNode("apiVersion")] = new YamlScalarNode("gitops.noctf.dev/v1");
+        ValidateChallenge(document, "Ctf", [], [], [], errors);
+        Check(errors.Any(error => error.Contains("apiVersion", StringComparison.Ordinal)),
+            "GitOps v1 manifests must be rejected.");
+
+        root.Children[new YamlScalarNode("apiVersion")] = new YamlScalarNode("gitops.noctf.dev/v2");
+        var definition = Mapping(root.Children[new YamlScalarNode("definition")]);
+        definition.Add("awd", new YamlMappingNode());
+        errors.Clear();
+        ValidateChallenge(document, "Ctf", [], [], [], errors);
+        Check(errors.Any(error => error.Contains("exactly the ctf branch", StringComparison.Ordinal)),
+            "Mixed Definition mode branches must be rejected.");
+
+        definition.Children.Remove(new YamlScalarNode("awd"));
+        definition.Add("schemaVersion", "3");
+        errors.Clear();
+        ValidateChallenge(document, "Ctf", [], [], [], errors);
+        Check(errors.Any(error => error.Contains("unknown field 'schemaVersion'", StringComparison.Ordinal)),
+            "Legacy Definition schemaVersion must be rejected.");
+        definition.Children.Remove(new YamlScalarNode("schemaVersion"));
+        root.Add("runtime", new YamlMappingNode { { "allocation", "PerTeam" } });
+        errors.Clear();
+        ValidateChallenge(document, "Ctf", [], [], [], errors);
+        Check(errors.Any(error => error.Contains("unknown field 'runtime'", StringComparison.Ordinal)),
+            "Legacy root Runtime structures must be rejected.");
+
+        var rules = Mapping(LoadYamlText("mode: Ctf\nctf: { scoreCurve: null }\nschemaVersion: 2\n"));
+        errors.Clear();
+        ValidateRules(rules, "Ctf", "web/contract", errors);
+        Check(errors.Any(error => error.Contains("schemaVersion", StringComparison.Ordinal)),
+            "Legacy Rules schemaVersion must be rejected.");
+        var awdpRules = Mapping(LoadYamlText("mode: Awdp\nawdp: { break: {}, fix: {} }\n"));
+        errors.Clear();
+        ValidateRules(awdpRules, "Awdp", "pwn/contract", errors);
+        Check(errors.Any(error => error.Contains("unknown field 'break'", StringComparison.Ordinal)),
+            "Legacy AWDP break/fix names must be rejected.");
     }
 
     private static void Check(bool condition, string message)

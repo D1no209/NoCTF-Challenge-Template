@@ -18,6 +18,7 @@
 #:include RepositoryApp.CompetitionApply.cs
 #:include RepositoryApp.Definition.cs
 #:include RepositoryApp.ManifestTemplates.cs
+#:include NoCtfContracts.cs
 #:include NoCtfClient.cs
 #:include RepositoryApp.ContractTests.cs
 #:include RepositoryApp.AuditRegressionTests.cs

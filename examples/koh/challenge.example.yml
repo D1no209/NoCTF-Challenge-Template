@@ -1,4 +1,4 @@
-apiVersion: gitops.noctf.dev/v1
+apiVersion: gitops.noctf.dev/v2
 kind: ChallengeTemplate
 id: 50000000-0000-0000-0000-000000000101
 mode: Koh
@@ -13,22 +13,40 @@ build:
     - key: hill
       context: runtime
       dockerfile: runtime/Dockerfile
-runtime:
-  allocation: Shared
-  limits:
-    memoryBytes: 268435456
-    nanoCpus: 500000000
-    pidsLimit: 128
-  definition:
+definition:
+  mode: Koh
+  koh: {}
+  runtime:
     kind: Container
-    image:
-      build: hill
-  endpoints:
-    - name: public
-      protocol: Http
-      containerPort: 8080
-      exposure: Participants
-  controlCheck:
-    protocol: Http
-    containerPort: 8080
-    path: /flag
+    allocation: Shared
+    egressPolicy: Isolated
+    limits:
+      memoryBytes: 268435456
+      nanoCpus: 500000000
+      pidsLimit: 128
+    urlBindings:
+      - urlTemplate: http://{HOST}:{PORT}/
+        exposure: Participants
+        containerPort: 8080
+        isControlCheck: false
+      - urlTemplate: http://{HOST}:{PORT}/flag
+        exposure: OwnerOnly
+        containerPort: 8080
+        isControlCheck: true
+    container:
+      image:
+        build: hill
+      command: []
+      environment: {}
+      labels: {}
+      portMappings:
+        - containerPort: 8080
+          hostPort: 0
+      security:
+        noNewPrivileges: false
+        readonlyRootfs: false
+        runAsNonRoot: false
+        capDrop: []
+        capAdd: []
+      flagEnvironmentVariableName: null
+      internalPorts: []

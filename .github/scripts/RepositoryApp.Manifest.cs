@@ -138,33 +138,29 @@ internal static partial class RepositoryApp
                 return;
             errors.Add($"{prefix}.{path}: build must name a declared image; external must be pinned to a sha256 digest.");
         }
-        if (root.Children.TryGetValue(new YamlScalarNode("runtime"), out var runtimeNode)
-            && Mapping(runtimeNode).Children.TryGetValue(new YamlScalarNode("definition"), out var definitionNode))
+        if (root.Children.TryGetValue(new YamlScalarNode("definition"), out var definitionNode)
+            && Mapping(definitionNode).Children.TryGetValue(new YamlScalarNode("runtime"), out var runtimeNode))
         {
-            var definition = Mapping(definitionNode);
-            if (Scalar(definition, "kind").Equals("Container", StringComparison.OrdinalIgnoreCase))
+            var runtime = Mapping(runtimeNode);
+            if (runtime.Children.TryGetValue(new YamlScalarNode("container"), out var containerNode))
             {
-                definition.Children.TryGetValue(new YamlScalarNode("image"), out var image);
-                ValidateReference(image, "runtime.definition.image");
+                Mapping(containerNode).Children.TryGetValue(new YamlScalarNode("image"), out var image);
+                ValidateReference(image, "definition.runtime.container.image");
             }
-            else if (Scalar(definition, "kind").Equals("Compose", StringComparison.OrdinalIgnoreCase))
+            else if (runtime.Children.TryGetValue(new YamlScalarNode("compose"), out var composeNode))
             {
-                if (!definition.Children.TryGetValue(new YamlScalarNode("serviceImages"), out var services)
+                if (!Mapping(composeNode).Children.TryGetValue(new YamlScalarNode("serviceImages"), out var services)
                     || services is not YamlMappingNode serviceImages || serviceImages.Children.Count == 0)
                     errors.Add($"{prefix}: Compose serviceImages must be a non-empty mapping.");
                 else
                     foreach (var service in serviceImages.Children)
-                        ValidateReference(service.Value, $"runtime.definition.serviceImages.{((YamlScalarNode)service.Key).Value}");
+                        ValidateReference(service.Value, $"definition.runtime.compose.serviceImages.{((YamlScalarNode)service.Key).Value}");
             }
-        }
-        if (root.Children.TryGetValue(new YamlScalarNode("checker"), out var checkerNode))
-        {
-            var checker = Mapping(checkerNode);
-            if (NormalizeMode(Scalar(root, "mode")) == "Awd"
-                && checker.Children.TryGetValue(new YamlScalarNode("job"), out var job))
-                checker = Mapping(job);
-            checker.Children.TryGetValue(new YamlScalarNode("image"), out var image);
-            ValidateReference(image, "checker.image");
+            if (Mapping(definitionNode).Children.TryGetValue(new YamlScalarNode("checker"), out var checkerNode))
+            {
+                Mapping(checkerNode).Children.TryGetValue(new YamlScalarNode("image"), out var image);
+                ValidateReference(image, "definition.checker.image");
+            }
         }
     }
 
