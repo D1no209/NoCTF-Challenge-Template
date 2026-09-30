@@ -17,11 +17,11 @@ internal static partial class RepositoryApp
         var issueNumber = 0;
         try
         {
-            var eventRoot = LoadInitializationEvent(root, args);
+            var eventRoot = LoadIssueEvent(root, args);
             var issue = eventRoot.GetProperty("issue");
             issueNumber = issue.GetProperty("number").GetInt32();
             var permission = ResolveCurrentRepositoryPermission(root, eventRoot);
-            if (!CanInitializeCompetition(permission))
+            if (!HasRepositoryWritePermission(permission))
                 throw new InvalidOperationException(
                     "Only users with write or administrator repository permission may initialize a competition.");
 
@@ -137,7 +137,7 @@ internal static partial class RepositoryApp
         }
     }
 
-    private static JsonElement LoadInitializationEvent(string root, string[] args)
+    private static JsonElement LoadIssueEvent(string root, string[] args)
     {
         var issueOption = Option(args, "--issue");
         var json = issueOption is null
@@ -165,7 +165,7 @@ internal static partial class RepositoryApp
         return current.RootElement.GetProperty("permission").GetString();
     }
 
-    private static bool CanInitializeCompetition(string? permission) =>
+    private static bool HasRepositoryWritePermission(string? permission) =>
         permission is "admin" or "write";
 
     private static string NormalizeApiMode(string value) => value.Trim().ToLowerInvariant() switch

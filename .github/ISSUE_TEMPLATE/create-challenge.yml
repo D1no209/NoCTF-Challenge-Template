@@ -1,8 +1,6 @@
 name: Create challenge
 description: Scaffold a reviewed challenge branch and draft pull request.
 title: "[Challenge] "
-labels:
-  - challenge:create
 body:
   - type: input
     id: title

@@ -72,10 +72,10 @@ internal static partial class RepositoryApp
             + "### Game Mode\n\nCtf\n");
         if (Field(initializationFields, "Game Mode") != "Ctf")
             throw new InvalidOperationException("Initialization Issue parsing failed.");
-        if (!CanInitializeCompetition("admin")
-            || !CanInitializeCompetition("write")
-            || CanInitializeCompetition("read")
-            || CanInitializeCompetition("none"))
+        if (!HasRepositoryWritePermission("admin")
+            || !HasRepositoryWritePermission("write")
+            || HasRepositoryWritePermission("read")
+            || HasRepositoryWritePermission("none"))
             throw new InvalidOperationException("Initialization repository permission policy failed.");
         try
         {

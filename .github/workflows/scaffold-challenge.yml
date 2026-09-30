@@ -3,6 +3,12 @@ name: Scaffold challenge
 on:
   issues:
     types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Existing challenge Issue number to retry
+        type: number
+        required: true
 
 permissions:
   contents: write
@@ -10,12 +16,12 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: challenge-scaffold-${{ github.event.issue.number }}
+  group: challenge-scaffold-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
   scaffold:
-    if: contains(github.event.issue.labels.*.name, 'challenge:create')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.issue.title, '[Challenge]')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -29,8 +35,16 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
       - name: Scaffold branch and draft pull request
+        if: github.event_name == 'issues'
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           dotnet run --file .github/scripts/repository.cs --
           scaffold --event "$GITHUB_EVENT_PATH"
+      - name: Retry scaffold by Issue number
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          dotnet run --file .github/scripts/repository.cs --
+          scaffold --issue '${{ inputs.issue_number }}'

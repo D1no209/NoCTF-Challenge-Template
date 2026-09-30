@@ -27,6 +27,10 @@ NoCTF enforces mutation permission again during Apply.
 Open the **Create challenge** Issue Form. The Action creates a
 `<direction>/<slug>` branch, stable UUIDs, a challenge directory, a
 `competition.yml` entry, and a Draft PR linked to the Issue.
+The PR body contains `Closes #<issue number>` and targets `main`, so merging it
+closes the Issue. To recover a missed or interrupted run, dispatch the
+**Scaffold challenge** workflow with the existing Issue number; it reuses an
+already-pushed branch and its UUIDs.
 
 After a PR is merged, Challenge CI validates and applies the desired state.
 The README workflow rebuilds the challenge table and direction statistics from
