@@ -20,10 +20,8 @@ internal static partial class RepositoryApp
             var eventRoot = LoadInitializationEvent(root, args);
             var issue = eventRoot.GetProperty("issue");
             issueNumber = issue.GetProperty("number").GetInt32();
-            var association = eventRoot.TryGetProperty("comment", out var comment)
-                ? comment.GetProperty("author_association").GetString()
-                : issue.GetProperty("author_association").GetString();
-            if (association is not ("OWNER" or "MEMBER" or "COLLABORATOR"))
+            var association = ResolveCurrentAuthorAssociation(root, eventRoot, issueNumber);
+            if (!CanInitializeCompetition(association))
                 throw new InvalidOperationException(
                     "Only repository owners, members, or collaborators may initialize a competition.");
 
@@ -151,6 +149,22 @@ internal static partial class RepositoryApp
         using var document = JsonDocument.Parse(json);
         return document.RootElement.Clone();
     }
+
+    private static string? ResolveCurrentAuthorAssociation(
+        string root,
+        JsonElement eventRoot,
+        int issueNumber)
+    {
+        var repository = RequiredEnvironment("GITHUB_REPOSITORY");
+        var path = eventRoot.TryGetProperty("comment", out var comment)
+            ? $"repos/{repository}/issues/comments/{comment.GetProperty("id").GetInt64()}"
+            : $"repos/{repository}/issues/{issueNumber}";
+        using var current = JsonDocument.Parse(Run(root, "gh", ["api", path]));
+        return current.RootElement.GetProperty("author_association").GetString();
+    }
+
+    private static bool CanInitializeCompetition(string? association) =>
+        association is "OWNER" or "MEMBER" or "COLLABORATOR";
 
     private static string NormalizeApiMode(string value) => value.Trim().ToLowerInvariant() switch
     {

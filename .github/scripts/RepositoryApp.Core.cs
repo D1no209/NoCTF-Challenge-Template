@@ -72,6 +72,12 @@ internal static partial class RepositoryApp
             + "### Game Mode\n\nCtf\n");
         if (Field(initializationFields, "Game Mode") != "Ctf")
             throw new InvalidOperationException("Initialization Issue parsing failed.");
+        if (!CanInitializeCompetition("OWNER")
+            || !CanInitializeCompetition("MEMBER")
+            || !CanInitializeCompetition("COLLABORATOR")
+            || CanInitializeCompetition("CONTRIBUTOR")
+            || CanInitializeCompetition("NONE"))
+            throw new InvalidOperationException("Initialization author association policy failed.");
         try
         {
             using var invalidClient = new NoCtfClient("file:///tmp/noctf", "token");
