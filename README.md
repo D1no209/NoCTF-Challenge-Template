@@ -131,5 +131,5 @@ README 自动重建，生成按比赛顺序排列的题目表与方向统计。�
 - 合并后自动删除题目分支。
 
 PR 不读取 NoCTF 或 Registry Secret。只有串行排队的 main Deploy workflow 最终 Apply job可以读取 Bot JWT。
-`NoCTF Contract` workflow 使用审核过的固定 NoCTF 提交运行八组强类型 fixture 和真实 HTTP/PostgreSQL
-联调；升级平台契约时必须显式更新该 SHA。
+私有 NoCTF 仓库的 `GitOps contract` workflow 固定本仓库审核提交，运行八组强类型 fixture 和真实
+HTTP/PostgreSQL 联调；升级平台契约时必须显式更新该 SHA。公开模板仓库不持有读取私有平台源码的凭据。
