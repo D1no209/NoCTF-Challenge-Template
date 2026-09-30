@@ -73,7 +73,7 @@ Bot 的不可用 `.invalid` Email 和随机 dummy PasswordHash 由服务端生�
 - 更新 `competition.yml`；
 - 创建带有 `Closes #n` 的 Draft PR。
 
-PR 指向 `main`；审核并合并后，GitHub 会自动关闭对应 Issue。若工作流中途失败，可手工运行
+PR 指向 `main`；审核并合并后，仓库的合并工作流会关闭对应 Issue。若工作流中途失败，可手工运行
 **Scaffold challenge** workflow，填写原 Issue number。重跑会沿用已经推送的分支和 UUID，并补建尚未创建的 PR。
 
 题目根目录包含：

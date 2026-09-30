@@ -1,0 +1,36 @@
+name: Close scaffold Issue
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  close-issue:
+    if: >-
+      github.event.pull_request.merged
+      && github.event.pull_request.base.ref == 'main'
+      && github.event.pull_request.user.login == 'github-actions[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close the Issue named by the scaffold PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          first_line="${PR_BODY%%$'\n'*}"
+          if [[ ! "$first_line" =~ ^Closes[[:space:]]+#([1-9][0-9]*)$ ]]; then
+            echo "The PR does not start with a scaffold Issue closing reference."
+            exit 0
+          fi
+          issue_number="${BASH_REMATCH[1]}"
+          if [[ "$(gh issue view "$issue_number" --json state --jq .state)" == "OPEN" ]]; then
+            gh issue close "$issue_number" --reason completed
+          fi
