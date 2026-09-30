@@ -20,10 +20,10 @@ internal static partial class RepositoryApp
             var eventRoot = LoadInitializationEvent(root, args);
             var issue = eventRoot.GetProperty("issue");
             issueNumber = issue.GetProperty("number").GetInt32();
-            var association = ResolveCurrentAuthorAssociation(root, eventRoot, issueNumber);
-            if (!CanInitializeCompetition(association))
+            var permission = ResolveCurrentRepositoryPermission(root, eventRoot);
+            if (!CanInitializeCompetition(permission))
                 throw new InvalidOperationException(
-                    "Only repository owners, members, or collaborators may initialize a competition.");
+                    "Only users with write or administrator repository permission may initialize a competition.");
 
             var fields = ParseIssueForm(issue.GetProperty("body").GetString() ?? "");
             var competitionId = Guid.Parse(Field(fields, "Competition ID"));
@@ -150,21 +150,23 @@ internal static partial class RepositoryApp
         return document.RootElement.Clone();
     }
 
-    private static string? ResolveCurrentAuthorAssociation(
+    private static string? ResolveCurrentRepositoryPermission(
         string root,
-        JsonElement eventRoot,
-        int issueNumber)
+        JsonElement eventRoot)
     {
         var repository = RequiredEnvironment("GITHUB_REPOSITORY");
-        var path = eventRoot.TryGetProperty("comment", out var comment)
-            ? $"repos/{repository}/issues/comments/{comment.GetProperty("id").GetInt64()}"
-            : $"repos/{repository}/issues/{issueNumber}";
+        var actor = eventRoot.TryGetProperty("comment", out var comment)
+            ? comment.GetProperty("user").GetProperty("login").GetString()
+            : eventRoot.GetProperty("issue").GetProperty("user").GetProperty("login").GetString();
+        if (string.IsNullOrWhiteSpace(actor))
+            return null;
+        var path = $"repos/{repository}/collaborators/{actor}/permission";
         using var current = JsonDocument.Parse(Run(root, "gh", ["api", path]));
-        return current.RootElement.GetProperty("author_association").GetString();
+        return current.RootElement.GetProperty("permission").GetString();
     }
 
-    private static bool CanInitializeCompetition(string? association) =>
-        association is "OWNER" or "MEMBER" or "COLLABORATOR";
+    private static bool CanInitializeCompetition(string? permission) =>
+        permission is "admin" or "write";
 
     private static string NormalizeApiMode(string value) => value.Trim().ToLowerInvariant() switch
     {
