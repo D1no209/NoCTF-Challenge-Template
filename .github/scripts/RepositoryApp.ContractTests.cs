@@ -44,7 +44,7 @@ internal static partial class RepositoryApp
         finally { Directory.Delete(temporary, recursive: true); }
     }
 
-    private static async Task ContractTestsAsync()
+    private static async Task ContractTestsAsync(string root)
     {
         await AuditRegressionTestsAsync();
         var requests = new List<string>();
@@ -232,6 +232,10 @@ internal static partial class RepositoryApp
                 "Scaffolding must work after initialization with an empty challenges list.");
             var directory = Path.Combine(temporary, "web", "test");
             Directory.CreateDirectory(directory);
+            await WriteChallengeGuideAsync(root, directory);
+            Check(File.ReadAllText(Path.Combine(directory, "GUIDE.md"))
+                == File.ReadAllText(Path.Combine(root, "docs", "challenge-guide.md")),
+                "Every scaffolded Challenge must contain the complete authoring guide.");
             await CreateScaffoldRuntimeFilesAsync(directory, "Awdp", "Container");
             var manifestPath = Path.Combine(directory, "challenge.yml");
             File.WriteAllText(manifestPath, ScaffoldManifest(Guid.NewGuid(), "Awdp", "Plan test", "Web", "Container"));

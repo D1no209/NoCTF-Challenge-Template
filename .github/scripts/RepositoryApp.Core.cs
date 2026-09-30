@@ -160,7 +160,7 @@ internal static partial class RepositoryApp
         catch (InvalidOperationException exception) when (exception.Message.Contains("escapes", StringComparison.Ordinal))
         {
         }
-        await ContractTestsAsync();
+        await ContractTestsAsync(root);
         Console.WriteLine("Self-test passed.");
         return 0;
     }

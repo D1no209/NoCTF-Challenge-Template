@@ -89,6 +89,7 @@ internal static partial class RepositoryApp
         await File.WriteAllTextAsync(
             Path.Combine(directory, "challenge.yml"),
             ScaffoldManifest(challengeId, mode, title, direction, runtime));
+        await WriteChallengeGuideAsync(root, directory);
         await CreateScaffoldRuntimeFilesAsync(directory, mode, runtime);
         AppendCompetitionChallenge(
             Path.Combine(root, "competition.yml"),
@@ -113,6 +114,14 @@ internal static partial class RepositoryApp
         }
         Console.WriteLine(JsonSerializer.Serialize(new { branch, challengeId, competitionChallengeId = instanceId }));
         return 0;
+    }
+
+    private static async Task WriteChallengeGuideAsync(string root, string directory)
+    {
+        var source = Path.Combine(root, "docs", "challenge-guide.md");
+        if (!File.Exists(source))
+            throw new FileNotFoundException("The challenge guide template is missing.", source);
+        await File.WriteAllTextAsync(Path.Combine(directory, "GUIDE.md"), await File.ReadAllTextAsync(source));
     }
 
     private static string EnsureChallengePullRequest(string root, string branch, string title,

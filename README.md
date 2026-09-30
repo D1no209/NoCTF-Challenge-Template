@@ -82,6 +82,7 @@ PR 指向 `main`；审核并合并后，仓库的合并工作流会关闭对应 
 <direction>/<slug>/
 ├─ challenge.yml
 ├─ statement.md
+├─ GUIDE.md
 ├─ attachments/
 ├─ runtime/
 ├─ checker/
@@ -89,7 +90,7 @@ PR 指向 `main`；审核并合并后，仓库的合并工作流会关闭对应 
 └─ solution/
 ```
 
-`solution/` 不上传 NoCTF。静态 Flag直接明文写在 `challenge.yml`。动态 Runtime Flag、AWD 轮换 Flag和 KoH Control Flag由平台生成。
+每个新题目目录都会生成 `GUIDE.md`，按其中的清单编写题面、附件、Flag、Runtime 和测试；指南原稿保存在 [`docs/challenge-guide.md`](docs/challenge-guide.md)。`solution/` 不上传 NoCTF。静态 Flag直接明文写在 `challenge.yml`。动态 Runtime Flag、AWD 轮换 Flag和 KoH Control Flag由平台生成。
 
 ## 本地命令
 
